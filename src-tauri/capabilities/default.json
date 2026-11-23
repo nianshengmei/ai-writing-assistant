@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "默认权限：窗口基础能力 + 网络请求（AI 调用）+ 文件对话框",
+  "windows": ["main"],
+  "permissions": ["core:default", "http:default", "dialog:default"]
+}
