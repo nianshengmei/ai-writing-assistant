@@ -6,6 +6,7 @@ import WritingDesk from "./WritingDesk";
 import MemoryPanel from "./MemoryPanel";
 import OutlinePanel from "./OutlinePanel";
 import HistoryPanel from "./HistoryPanel";
+import ModelSelector from "./ModelSelector";
 import type { ProjectDoc } from "@/lib/types";
 
 const TABS = [
@@ -50,6 +51,9 @@ export default function ProjectView({ workId, onBack }: { workId: string; onBack
             </button>
           ))}
         </nav>
+        <div className="ml-auto">
+          <ModelSelector />
+        </div>
       </header>
       <main className="flex min-h-0 flex-1 flex-col">
         {tab === "write" && <WritingDesk project={project} onChanged={refresh} />}

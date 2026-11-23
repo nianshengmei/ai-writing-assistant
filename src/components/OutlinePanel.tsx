@@ -19,7 +19,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   const workId = project.id;
   const [entries, setEntries] = useState<OutlineEntry[]>([]);
   const [newTitle, setNewTitle] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [proposingId, setProposingId] = useState<string | null>(null);
   const [proposal, setProposal] = useState("");
   const [tick, setTick] = useState(0);
@@ -40,12 +40,12 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   async function propose(index: number, entry: OutlineEntry) {
     const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
-      setStatus("请先在设置中配置模型");
+      setStatus({ text: "请先在顶栏选择模型（并确认已在设置中配好 API Key）", ok: false });
       return;
     }
     setProposingId(entry.chId);
     setProposal("");
-    setStatus("正在续推细纲…");
+    setStatus({ text: "正在续推细纲…", ok: true });
     try {
       const recap = await listRecap(workId);
       await streamChat({
@@ -53,9 +53,9 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
         messages: buildOutlineProposeMessages({ project, entries, targetIndex: index, recap }),
         onDelta: (d) => setProposal((p) => p + d),
       });
-      setStatus("");
+      setStatus(null);
     } catch (e) {
-      setStatus(`续推失败：${(e as Error)?.message ?? e}`);
+      setStatus({ text: `续推失败：${(e as Error)?.message ?? e}`, ok: false });
     }
   }
 
@@ -83,7 +83,15 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
         <button onClick={add} className="rounded-lg bg-stone-900 px-3 py-2 text-sm text-white hover:bg-stone-700">
           + 添加章节
         </button>
-        {status && <span className="self-center text-xs text-stone-500">{status}</span>}
+        {status && (
+          <span
+            className={`self-center whitespace-pre-wrap break-all text-xs ${
+              status.ok ? "text-stone-500" : "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700"
+            }`}
+          >
+            {status.text}
+          </span>
+        )}
       </div>
 
       {entries.length === 0 && <p className="text-sm text-stone-400">还没有章节。先添加章节，再为每章填写细纲（生成正文时的核心依据）。</p>}

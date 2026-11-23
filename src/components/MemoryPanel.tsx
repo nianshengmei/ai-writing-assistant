@@ -44,7 +44,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   const [presets, setPresets] = useState<FuturePreset[]>([]);
   const [recap, setRecap] = useState<RecapEntry[]>([]);
   const [foreshadows, setForeshadows] = useState<ForeshadowEntry[]>([]);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -70,10 +70,10 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   async function aiFillCharacter(c: CharacterEntry) {
     const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
-      setStatus("请先在设置中配置模型");
+      setStatus({ text: "请先在顶栏选择模型（并确认已在设置中配好 API Key）", ok: false });
       return;
     }
-    setStatus(`正在为「${c.name || "新配角"}」生成设定…`);
+    setStatus({ text: `正在为「${c.name || "新配角"}」生成设定…`, ok: true });
     try {
       const text = await chatOnce(
         provider,
@@ -81,16 +81,16 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
       );
       setCharacters(characters.map((x) => (x.id === c.id ? { ...x, content: text } : x)));
       await saveCharacters(workId, characters.map((x) => (x.id === c.id ? { ...x, content: text } : x)));
-      setStatus("已生成并保存");
+      setStatus({ text: "已生成并保存", ok: true });
     } catch (e) {
-      setStatus(`生成失败：${(e as Error)?.message ?? e}`);
+      setStatus({ text: `生成失败：${(e as Error)?.message ?? e}`, ok: false });
     }
   }
 
   async function aiFillWorldview(w: WorldviewEntry) {
     const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
-      setStatus("请先在设置中配置模型");
+      setStatus({ text: "请先在顶栏选择模型（并确认已在设置中配好 API Key）", ok: false });
       return;
     }
     try {
@@ -98,9 +98,9 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
       const next = worldview.map((x) => (x.id === w.id ? { ...x, content: text } : x));
       setWorldview(next);
       await saveWorldview(workId, next);
-      setStatus("已生成并保存");
+      setStatus({ text: "已生成并保存", ok: true });
     } catch (e) {
-      setStatus(`生成失败：${(e as Error)?.message ?? e}`);
+      setStatus({ text: `生成失败：${(e as Error)?.message ?? e}`, ok: false });
     }
   }
 
@@ -122,7 +122,15 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
           </button>
         ))}
       </div>
-      {status && <p className="mb-3 text-xs text-stone-500">{status}</p>}
+      {status && (
+        <p
+          className={`mb-3 max-w-3xl whitespace-pre-wrap break-all text-xs ${
+            status.ok ? "text-stone-500" : "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700"
+          }`}
+        >
+          {status.text}
+        </p>
+      )}
 
       {tab === "protagonist" && protagonist && (
         <div className="max-w-2xl space-y-3">
@@ -136,7 +144,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
           <button
             onClick={async () => {
               await saveProtagonist(workId, protagonist);
-              setStatus("主角记忆已保存");
+              setStatus({ text: "主角记忆已保存", ok: true });
               onChanged();
             }}
             className="rounded-lg bg-amber-600 px-4 py-2 text-sm text-white hover:bg-amber-500"

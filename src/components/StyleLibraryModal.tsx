@@ -62,7 +62,7 @@ function parseJsonLoose<T>(text: string): T | null {
 export default function StyleLibraryModal({ onClose }: { onClose: () => void }) {
   const [styles, setStyles] = useState<StyleDoc[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [material, setMaterial] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [abortCtl, setAbortCtl] = useState<AbortController | null>(null);
@@ -108,7 +108,7 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
   async function saveCurrent() {
     if (!selected) return;
     await saveStyle(selected);
-    setStatus("风格已保存");
+    setStatus({ text: "风格已保存", ok: true });
     reload();
   }
 
@@ -138,29 +138,29 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
 
   async function importTxtFile(file: File) {
     if (!/\.(txt|md)$/i.test(file.name)) {
-      setStatus("仅支持 .txt / .md 文本文件");
+      setStatus({ text: "仅支持 .txt / .md 文本文件", ok: false });
       return;
     }
     const text = await file.text();
     setMaterial(text);
-    setStatus(`已导入《${file.name}》，共 ${text.length} 字`);
+    setStatus({ text: `已导入《${file.name}》，共 ${text.length} 字`, ok: true });
   }
 
   async function runExtraction() {
     if (!selected) return;
     if (!material.trim()) {
-      setStatus("请先粘贴素材或导入小说原文 txt 文件");
+      setStatus({ text: "请先粘贴素材或导入小说原文 txt 文件", ok: false });
       return;
     }
     const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
-      setStatus("请先在设置中配置模型（含 API Key）");
+      setStatus({ text: "请先在设置中配置模型（含 API Key）", ok: false });
       return;
     }
     const ctrl = new AbortController();
     setAbortCtl(ctrl);
     setExtracting(true);
-    setStatus("");
+    setStatus(null);
     const chunkSize = 8000;
     const chunks: string[] = [];
     for (let i = 0; i < material.length; i += chunkSize) chunks.push(material.slice(i, i + chunkSize));
@@ -168,20 +168,20 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
     try {
       const observations: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
-        setStatus(`提炼风格观察 ${i + 1}/${chunks.length}…`);
+        setStatus({ text: `提炼风格观察 ${i + 1}/${chunks.length}…`, ok: true });
         const obs = await chatOnce(provider, buildStyleObservationMessages(chunks[i], obsSystem));
         observations.push(`【片段 ${i + 1}】\n${obs}`);
       }
 
       let mergedProfile: Partial<StyleProfile> | null = null;
       if (observations.length > 0) {
-        setStatus("合并风格画像…");
+        setStatus({ text: "合并风格画像…", ok: true });
         const merged = await chatOnce(provider, buildStyleMergeMessages(observations, mergeSystem));
         mergedProfile = parseJsonLoose<StyleProfile>(merged);
-        if (!mergedProfile) setStatus("画像合并结果解析失败，请手动填写画像字段");
+        if (!mergedProfile) setStatus({ text: "画像合并结果解析失败，请手动填写画像字段", ok: false });
       }
 
-      setStatus("摘录语言/动作/场面示例…");
+      setStatus({ text: "摘录语言/动作/场面示例…", ok: true });
       const samplesRaw = await chatOnce(provider, buildStyleSamplesMessages(chunks[0], samplesSystem));
       const samples = parseJsonLoose<{ language?: string; action?: string; scene?: string }>(samplesRaw);
 
@@ -194,10 +194,10 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
         sourceNote: selected.sourceNote || `AI 提炼自 ${material.length} 字素材`,
       };
       await saveStyle(next);
-      setStatus("提炼完成，画像与示例已填入，可继续手动调整后保存");
+      setStatus({ text: "提炼完成，画像与示例已填入，可继续手动调整后保存", ok: true });
       reload();
     } catch (e) {
-      setStatus((e as Error)?.name === "AbortError" ? "已停止提炼" : `提炼失败：${(e as Error)?.message ?? e}`);
+      setStatus((e as Error)?.name === "AbortError" ? { text: "已停止提炼", ok: true } : { text: `提炼失败：${(e as Error)?.message ?? e}`, ok: false });
     } finally {
       setExtracting(false);
       setAbortCtl(null);
@@ -364,7 +364,15 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
                       开始提炼
                     </button>
                   )}
-                  {status && <span className="self-center text-xs text-stone-500">{status}</span>}
+                  {status && (
+                  <span
+                    className={`whitespace-pre-wrap break-all text-xs ${
+                      status.ok ? "text-stone-500" : "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700"
+                    }`}
+                  >
+                    {status.text}
+                  </span>
+                )}
                 </div>
               </details>
 
