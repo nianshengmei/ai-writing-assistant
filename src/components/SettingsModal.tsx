@@ -177,24 +177,9 @@ export default function SettingsModal({ onClose, onChanged }: { onClose: () => v
                   value={selected.apiKey}
                   onChange={(e) => updateSelected({ apiKey: e.target.value })}
                 />
-                {preset && preset.models.length > 0 ? (
-                  <div className="flex gap-2">
-                    <select
-                      className="flex-1 rounded-lg border border-stone-300 px-3 py-2"
-                      value={selected.model}
-                      onChange={(e) => updateSelected({ model: e.target.value })}
-                    >
-                      {preset.models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
                 <input
                   className="rounded-lg border border-stone-300 px-3 py-2 font-mono text-xs"
-                  placeholder="模型名（可手填任意值）"
+                  placeholder="模型名（纯自定义，任意值均可）"
                   value={selected.model}
                   onChange={(e) => updateSelected({ model: e.target.value })}
                 />
