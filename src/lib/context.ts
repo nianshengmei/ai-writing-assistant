@@ -169,37 +169,46 @@ export function buildRecapMessages(args: { workTitle: string; chapterTitle: stri
   ];
 }
 
-// ---------- 风格提炼 ----------
-export function buildStyleObservationMessages(materialChunk: string): ChatMessage[] {
+// ---------- 风格提炼（提示词常量导出，供 UI 预览/编辑） ----------
+export const STYLE_OBSERVATION_SYSTEM =
+  "你是文体分析专家。从给定小说文本片段中提炼写作风格观察，输出中文，逐条罗列，每条一行，聚焦：叙事视角、句式节奏（含平均句长）、对话风格（对话占比、对话标签用法）、描写配比（对话/动作/心理/环境大致比例）、修辞习惯、高频词汇与口头禅、明显避免的写法。只输出观察条目，不要客套话。";
+
+export const STYLE_MERGE_SYSTEM =
+  '你是文体分析专家。请把多条风格观察合并为一份统一的风格画像，严格输出 JSON（不要 markdown 代码块包裹），字段如下：\n{"pov":"叙事视角","tone":"文风基调","sentenceRhythm":"句式节奏","dialogueStyle":"对话风格","descriptionRatio":"描写配比","rhetoric":"修辞习惯","vocabularyFavor":"高频词与口头禅","vocabularyAvoid":"避免的用词","pacing":"节奏把控","hooks":"章末钩子习惯","taboos":"写作禁忌"}';
+
+export const STYLE_SAMPLES_SYSTEM =
+  "你是小说编辑。从给定文本中分别摘录三类最具代表性的原文片段（必须是原文，不要改写）：1) 最能代表语言风格的连贯段落（约200字）；2) 最精彩的动作描写（约150字）；3) 最经典的场面描写（约250字）。输出 JSON：{\"language\":\"...\",\"action\":\"...\",\"scene\":\"...\"}，不要代码块包裹。";
+
+export function styleObservationUser(materialChunk: string): string {
+  return `【文本片段】\n${materialChunk.slice(0, 8000)}`;
+}
+
+export function buildStyleObservationMessages(materialChunk: string, systemOverride?: string): ChatMessage[] {
   return [
-    {
-      role: "system",
-      content:
-        "你是文体分析专家。从给定小说文本片段中提炼写作风格观察，输出中文，逐条罗列，每条一行，聚焦：叙事视角、句式节奏（含平均句长）、对话风格（对话占比、对话标签用法）、描写配比（对话/动作/心理/环境大致比例）、修辞习惯、高频词汇与口头禅、明显避免的写法。只输出观察条目，不要客套话。",
-    },
-    { role: "user", content: `【文本片段】\n${materialChunk.slice(0, 8000)}` },
+    { role: "system", content: systemOverride ?? STYLE_OBSERVATION_SYSTEM },
+    { role: "user", content: styleObservationUser(materialChunk) },
   ];
 }
 
-export function buildStyleMergeMessages(observations: string[]): ChatMessage[] {
+export function styleMergeUser(observations: string[]): string {
+  return `【风格观察列表】\n${observations.join("\n")}`;
+}
+
+export function buildStyleMergeMessages(observations: string[], systemOverride?: string): ChatMessage[] {
   return [
-    {
-      role: "system",
-      content:
-        '你是文体分析专家。请把多条风格观察合并为一份统一的风格画像，严格输出 JSON（不要 markdown 代码块包裹），字段如下：\n{"pov":"叙事视角","tone":"文风基调","sentenceRhythm":"句式节奏","dialogueStyle":"对话风格","descriptionRatio":"描写配比","rhetoric":"修辞习惯","vocabularyFavor":"高频词与口头禅","vocabularyAvoid":"避免的用词","pacing":"节奏把控","hooks":"章末钩子习惯","taboos":"写作禁忌"}',
-    },
-    { role: "user", content: `【风格观察列表】\n${observations.join("\n")}` },
+    { role: "system", content: systemOverride ?? STYLE_MERGE_SYSTEM },
+    { role: "user", content: styleMergeUser(observations) },
   ];
 }
 
-export function buildStyleSamplesMessages(materialChunk: string): ChatMessage[] {
+export function styleSamplesUser(materialChunk: string): string {
+  return `【文本片段】\n${materialChunk.slice(0, 8000)}`;
+}
+
+export function buildStyleSamplesMessages(materialChunk: string, systemOverride?: string): ChatMessage[] {
   return [
-    {
-      role: "system",
-      content:
-        "你是小说编辑。从给定文本中分别摘录三类最具代表性的原文片段（必须是原文，不要改写）：1) 最能代表语言风格的连贯段落（约200字）；2) 最精彩的动作描写（约150字）；3) 最经典的场面描写（约250字）。输出 JSON：{\"language\":\"...\",\"action\":\"...\",\"scene\":\"...\"}，不要代码块包裹。",
-    },
-    { role: "user", content: `【文本片段】\n${materialChunk.slice(0, 8000)}` },
+    { role: "system", content: systemOverride ?? STYLE_SAMPLES_SYSTEM },
+    { role: "user", content: styleSamplesUser(materialChunk) },
   ];
 }
 

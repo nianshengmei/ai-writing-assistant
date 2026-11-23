@@ -47,6 +47,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
   const [feedback, setFeedback] = useState("");
   const [showFeedback, setShowFeedback] = useState(false);
   const [preview, setPreview] = useState<AssembledPrompt | null>(null);
+  const [editSystem, setEditSystem] = useState("");
+  const [editUser, setEditUser] = useState("");
   const [targetLength, setTargetLength] = useState(2500);
   const [tick, setTick] = useState(0);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -166,12 +168,16 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     });
   }
 
-  async function runGeneration(feedbackArg?: string) {
+  async function runGeneration(feedbackArg?: string, override?: { system: string; user: string }) {
     if (!entry) return;
     const provider = await ensureProvider();
     if (!provider) return;
     const assembled = await buildPrompt(feedbackArg);
     if (!assembled) return;
+    // override：来自提示词预览编辑后的最终提示词，按编辑稿生成
+    const finalPrompt: AssembledPrompt = override
+      ? { ...assembled, system: override.system, user: override.user }
+      : assembled;
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -184,8 +190,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       await streamChat({
         config: provider,
         messages: [
-          { role: "system", content: assembled.system },
-          { role: "user", content: assembled.user },
+          { role: "system", content: finalPrompt.system },
+          { role: "user", content: finalPrompt.user },
         ],
         signal: ctrl.signal,
         onDelta: (d) => {
@@ -196,7 +202,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       await saveDraft(workId, entry.chId, acc);
       const rec = await saveGeneration(workId, {
         chId: entry.chId,
-        prompt: assembled,
+        prompt: finalPrompt,
         providerName: provider.name,
         model: provider.model,
         styleIds: [...selectedStyleIds],
@@ -214,7 +220,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
         await saveDraft(workId, entry.chId, acc);
         await saveGeneration(workId, {
           chId: entry.chId,
-          prompt: assembled,
+          prompt: finalPrompt,
           providerName: provider.name,
           model: provider.model,
           styleIds: [...selectedStyleIds],
@@ -238,6 +244,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     const assembled = await buildPrompt();
     if (!assembled) return;
     setPreview(assembled);
+    setEditSystem(assembled.system);
+    setEditUser(assembled.user);
     setShowPreviewModal(true);
   }
 
@@ -553,16 +561,36 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-stone-200 px-5 py-3">
-              <h2 className="font-medium">提示词预览（本次生成将发送的完整内容）</h2>
-              <button onClick={() => setShowPreviewModal(false)} className="text-sm text-stone-400 hover:text-stone-700">
-                关闭
-              </button>
+              <h2 className="font-medium">提示词预览与编辑（下方内容可直接修改，改完可直接生成）</h2>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setShowPreviewModal(false);
+                    runGeneration(undefined, { system: editSystem, user: editUser });
+                  }}
+                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-500"
+                >
+                  按此提示词生成本章
+                </button>
+                <button onClick={() => setShowPreviewModal(false)} className="text-sm text-stone-400 hover:text-stone-700">
+                  关闭
+                </button>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-5 text-xs">
-              <h3 className="mb-1 font-medium text-purple-700">System</h3>
-              <pre className="mb-4 whitespace-pre-wrap rounded-lg bg-purple-50 p-3 leading-relaxed">{preview.system}</pre>
-              <h3 className="mb-1 font-medium text-blue-700">User</h3>
-              <pre className="whitespace-pre-wrap rounded-lg bg-blue-50 p-3 leading-relaxed">{preview.user}</pre>
+              <h3 className="mb-1 font-medium text-purple-700">System（可编辑）</h3>
+              <textarea
+                className="mb-4 min-h-64 w-full resize-y whitespace-pre-wrap rounded-lg bg-purple-50 p-3 font-mono leading-relaxed text-stone-800 outline-none focus:ring-1 focus:ring-purple-400"
+                value={editSystem}
+                onChange={(e) => setEditSystem(e.target.value)}
+              />
+              <h3 className="mb-1 font-medium text-blue-700">User（可编辑）</h3>
+              <textarea
+                className="min-h-96 w-full resize-y whitespace-pre-wrap rounded-lg bg-blue-50 p-3 font-mono leading-relaxed text-stone-800 outline-none focus:ring-1 focus:ring-blue-400"
+                value={editUser}
+                onChange={(e) => setEditUser(e.target.value)}
+              />
+              <p className="mt-3 text-stone-400">编辑后的提示词仅本次生成生效；生成历史会完整记录实际发送的内容。</p>
             </div>
           </div>
         </div>
