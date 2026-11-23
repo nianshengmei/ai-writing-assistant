@@ -15,9 +15,9 @@ import {
   listRecap,
   listForeshadows,
   saveForeshadows,
-  getActiveProvider,
   uid,
 } from "@/lib/library";
+import { getSelectedProvider } from "@/lib/useProviderSelection";
 import { chatOnce } from "@/lib/llm";
 import { buildCharacterAssistMessages, buildWorldviewAssistMessages } from "@/lib/context";
 import type { ProjectDoc, ProtagonistDoc, CharacterEntry, WorldviewEntry, RuleEntry, FuturePreset, RecapEntry, ForeshadowEntry } from "@/lib/types";
@@ -68,7 +68,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   }, [workId, tick]);
 
   async function aiFillCharacter(c: CharacterEntry) {
-    const provider = await getActiveProvider();
+    const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
       setStatus("请先在设置中配置模型");
       return;
@@ -88,7 +88,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   }
 
   async function aiFillWorldview(w: WorldviewEntry) {
-    const provider = await getActiveProvider();
+    const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
       setStatus("请先在设置中配置模型");
       return;

@@ -12,7 +12,6 @@ import {
   updateOutlineEntry,
   saveGeneration,
   updateGenerationStatus,
-  getActiveProvider,
   getProtagonist,
   listCharacters,
   listWorldview,
@@ -23,6 +22,7 @@ import {
   appendRecap,
 } from "@/lib/library";
 import { streamChat, chatOnce } from "@/lib/llm";
+import { getSelectedProvider, useProviderSelection } from "@/lib/useProviderSelection";
 import { assembleGeneration, buildRecapMessages, type AssembledPrompt, type MemoryBundle } from "@/lib/context";
 import { exportWork } from "@/lib/exporter";
 import type { ProjectDoc, WorkOutline, OutlineEntry, StyleDoc } from "@/lib/types";
@@ -55,6 +55,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
   const abortRef = useRef<AbortController | null>(null);
   const streamingRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { providers, selectedId: providerId, select: selectProvider } = useProviderSelection();
 
   const reload = () => setTick((t) => t + 1);
 
@@ -116,7 +118,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
   }
 
   async function ensureProvider() {
-    const provider = await getActiveProvider();
+    const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
       setStatus("请先在设置中配置模型（含 API Key）");
       return null;
@@ -428,6 +430,23 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
 
             {/* 工具栏 */}
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {providers.length > 0 ? (
+                <select
+                  disabled={streaming}
+                  title="本次生成使用的模型（全局生效）"
+                  value={providerId}
+                  onChange={(e) => selectProvider(e.target.value)}
+                  className="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-xs text-stone-700"
+                >
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      🧠 {p.name} · {p.model || "未设模型"}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="rounded-lg bg-red-50 px-2 py-1.5 text-xs text-red-600">未配置模型（首页 → 设置）</span>
+              )}
               {streaming ? (
                 <button
                   onClick={() => abortRef.current?.abort()}

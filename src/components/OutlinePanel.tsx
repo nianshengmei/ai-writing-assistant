@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getOutline, saveOutline, addChapterEntry, updateOutlineEntry, removeChapterEntry, moveChapter, listRecap, getActiveProvider } from "@/lib/library";
+import {
+  getOutline,
+  saveOutline,
+  addChapterEntry,
+  updateOutlineEntry,
+  removeChapterEntry,
+  moveChapter,
+  listRecap,
+} from "@/lib/library";
+import { getSelectedProvider } from "@/lib/useProviderSelection";
 import { streamChat } from "@/lib/llm";
 import { buildOutlineProposeMessages } from "@/lib/context";
 import type { ProjectDoc, OutlineEntry } from "@/lib/types";
@@ -29,7 +38,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   }
 
   async function propose(index: number, entry: OutlineEntry) {
-    const provider = await getActiveProvider();
+    const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
       setStatus("请先在设置中配置模型");
       return;

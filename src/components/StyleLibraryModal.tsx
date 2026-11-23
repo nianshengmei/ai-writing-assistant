@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listStyles, saveStyle, deleteStyle, nextStyleId, getActiveProvider } from "@/lib/library";
+import {
+  listStyles,
+  saveStyle,
+  deleteStyle,
+  nextStyleId,
+} from "@/lib/library";
+import { getSelectedProvider } from "@/lib/useProviderSelection";
 import { streamChat, chatOnce } from "@/lib/llm";
 import { buildStyleObservationMessages, buildStyleMergeMessages, buildStyleSamplesMessages } from "@/lib/context";
 import type { StyleDoc, StyleProfile } from "@/lib/types";
@@ -124,7 +130,7 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
       setStatus("请先粘贴用于提炼风格的小说素材");
       return;
     }
-    const provider = await getActiveProvider();
+    const provider = await getSelectedProvider();
     if (!provider || !provider.apiKey) {
       setStatus("请先在设置中配置模型（含 API Key）");
       return;
