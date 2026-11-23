@@ -43,18 +43,36 @@ fn set_data_root(app: tauri::AppHandle, path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let picked = app.dialog().file().blocking_pick_folder();
-    Ok(picked.map(|f| f.to_string()))
+    // blocking 对话框 API 仅桌面端可用，移动端返回 None（数据目录用默认值）
+    #[cfg(desktop)]
+    {
+        let picked = app.dialog().file().blocking_pick_folder();
+        return Ok(picked.map(|f| f.to_string()));
+    }
+    #[cfg(mobile)]
+    {
+        let _ = &app;
+        Ok(None)
+    }
 }
 
 #[tauri::command]
 fn pick_save_path(app: tauri::AppHandle, default_name: String) -> Result<Option<String>, String> {
-    let picked = app
-        .dialog()
-        .file()
-        .set_file_name(&default_name)
-        .blocking_pick_file();
-    Ok(picked.map(|f| f.to_string()))
+    #[cfg(desktop)]
+    {
+        let picked = app
+            .dialog()
+            .file()
+            .set_file_name(&default_name)
+            .blocking_pick_file();
+        return Ok(picked.map(|f| f.to_string()));
+    }
+    #[cfg(mobile)]
+    {
+        let _ = &app;
+        let _ = &default_name;
+        Ok(None)
+    }
 }
 
 /// 防目录穿越：拒绝包含 ".." 的相对路径
