@@ -137,3 +137,83 @@ export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
+
+// ---------- 新增：标签种类 / 长篇记忆 / 全文脉络 / 后文预测 / 大纲对话 / 提示词覆盖 ----------
+
+export interface WorldviewCategoriesDoc {
+  categories: string[];
+}
+
+/** 50 章窗口内的段摘要（每 10 章压缩为一段） */
+export interface RecapSegment {
+  fromCh: string;
+  toCh: string;
+  summary: string;
+  createdAt: number;
+}
+
+export interface RecapLongDoc {
+  segments: RecapSegment[];
+  updatedAt: number;
+}
+
+/** 全文脉络：全书宏观记忆，滚动更新 */
+export interface StoryArcDoc {
+  mainline: string;
+  stages: string;
+  relations: string;
+  updatedAt: number;
+}
+
+/** 后文预测：AI 对下一章的推测，可被作者修改 */
+export interface FuturePrediction {
+  chId: string; // 预测的目标章节
+  aiContent: string; // AI 原始生成内容，用于判定是否被作者改过
+  content: string; // 当前生效内容（可能已被作者编辑）
+  generatedAt: number;
+  editedAt: number | null;
+  reviewedAt: number | null;
+}
+
+export interface OutlineChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  at: number;
+}
+
+export interface OutlineChatDoc {
+  messages: OutlineChatMessage[];
+  updatedAt: number;
+}
+
+/** 按功能持久化的提示词覆盖 */
+export interface PromptOverride {
+  system?: string;
+  /** 追加到 User 末尾的「作者补充要求」，持久化 */
+  extra?: string;
+}
+
+export type PromptOverrides = Record<string, PromptOverride>;
+
+/** 非正文类 AI 调用记录，保持全链路可追溯 */
+export interface AiCallRecord {
+  id: string;
+  feature: string;
+  prompt: { system: string; user: string };
+  providerName: string;
+  model: string;
+  output: string;
+  createdAt: number;
+}
+
+/** 记忆更新的分组结果 */
+export interface MemoryUpdateResult {
+  protagonist?: ProtagonistDoc;
+  characters?: CharacterEntry[];
+  worldview?: WorldviewEntry[];
+  recapSummary?: string;
+  foreshadows?: ForeshadowEntry[];
+  segments?: RecapSegment[];
+  storyArc?: StoryArcDoc;
+  prediction?: string;
+}

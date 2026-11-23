@@ -6,14 +6,18 @@ import {
   saveStyle,
   deleteStyle,
   nextStyleId,
+  loadPromptOverrides,
+  savePromptOverride,
 } from "@/lib/library";
 import { useFeatureModel } from "@/lib/useProviderSelection";
 import ModelPicker from "./ModelPicker";
+import PromptConfirmModal, { type PromptConfirmPayload } from "./PromptConfirmModal";
 import { streamChat, chatOnce } from "@/lib/llm";
 import {
   buildStyleObservationMessages,
   buildStyleMergeMessages,
   buildStyleSamplesMessages,
+  styleObservationUser,
   STYLE_OBSERVATION_SYSTEM,
   STYLE_MERGE_SYSTEM,
   STYLE_SAMPLES_SYSTEM,
@@ -73,7 +77,22 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
   const [samplesSystem, setSamplesSystem] = useState(STYLE_SAMPLES_SYSTEM);
   const [showPrompts, setShowPrompts] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [promptModal, setPromptModal] = useState<{
+    system: string;
+    user: string;
+    defaultSystem: string;
+    meta: string;
+    onConfirm: (p: PromptConfirmPayload) => Promise<void> | void;
+  } | null>(null);
   const extractModel = useFeatureModel("style-extract");
+
+  useEffect(() => {
+    loadPromptOverrides().then((all) => {
+      if (all["style-observation"]?.system) setObsSystem(all["style-observation"].system);
+      if (all["style-merge"]?.system) setMergeSystem(all["style-merge"].system);
+      if (all["style-samples"]?.system) setSamplesSystem(all["style-samples"].system);
+    });
+  }, []);
 
   useEffect(() => {
     listStyles().then((s) => {
@@ -148,7 +167,36 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
     setStatus({ text: `已导入《${file.name}》，共 ${text.length} 字`, ok: true });
   }
 
-  async function runExtraction() {
+  function openExtractionModal() {
+    if (!selected) return;
+    if (!material.trim()) {
+      setStatus({ text: "请先粘贴素材或导入小说原文 txt 文件", ok: false });
+      return;
+    }
+    const provider = extractModel.picked;
+    if (!provider || !provider.apiKey) {
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
+      return;
+    }
+    const chunks = Math.ceil(material.length / 8000);
+    setPromptModal({
+      system: obsSystem,
+      user: styleObservationUser(material.slice(0, 2000)),
+      defaultSystem: STYLE_OBSERVATION_SYSTEM,
+      meta: `素材 ${material.length} 字，约 ${chunks} 块；共 ${chunks + 2} 次调用（观察 ${chunks} + 合并画像 1 + 摘录示例 1）。第 ②③ 段提示词在折叠区可单独修改。`,
+      onConfirm: async (p) => {
+        setPromptModal(null);
+        setObsSystem(p.system);
+        await savePromptOverride("style-observation", {
+          system: p.system.trim() !== STYLE_OBSERVATION_SYSTEM.trim() ? p.system : undefined,
+          extra: p.extra || undefined,
+        });
+        await runExtraction(p.system);
+      },
+    });
+  }
+
+  async function runExtraction(obsOverride?: string) {
     if (!selected) return;
     if (!material.trim()) {
       setStatus({ text: "请先粘贴素材或导入小说原文 txt 文件", ok: false });
@@ -171,7 +219,7 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
       const observations: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
         setStatus({ text: `提炼风格观察 ${i + 1}/${chunks.length}…`, ok: true });
-        const obs = await chatOnce(provider, buildStyleObservationMessages(chunks[i], obsSystem));
+        const obs = await chatOnce(provider, buildStyleObservationMessages(chunks[i], obsOverride ?? obsSystem));
         observations.push(`【片段 ${i + 1}】\n${obs}`);
       }
 
@@ -339,16 +387,39 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
                           onChange={(e) => setSamplesSystem(e.target.value)}
                         />
                       </div>
-                      <button
-                        onClick={() => {
-                          setObsSystem(STYLE_OBSERVATION_SYSTEM);
-                          setMergeSystem(STYLE_MERGE_SYSTEM);
-                          setSamplesSystem(STYLE_SAMPLES_SYSTEM);
-                        }}
-                        className="text-xs text-stone-400 hover:text-stone-700"
-                      >
-                        恢复默认提示词
-                      </button>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          onClick={async () => {
+                            const all = await loadPromptOverrides();
+                            await savePromptOverride("style-observation", {
+                              ...all["style-observation"],
+                              system: obsSystem.trim() !== STYLE_OBSERVATION_SYSTEM.trim() ? obsSystem : undefined,
+                            });
+                            await savePromptOverride("style-merge", {
+                              ...all["style-merge"],
+                              system: mergeSystem.trim() !== STYLE_MERGE_SYSTEM.trim() ? mergeSystem : undefined,
+                            });
+                            await savePromptOverride("style-samples", {
+                              ...all["style-samples"],
+                              system: samplesSystem.trim() !== STYLE_SAMPLES_SYSTEM.trim() ? samplesSystem : undefined,
+                            });
+                            setStatus({ text: "三段提示词已保存，下次打开沿用", ok: true });
+                          }}
+                          className="text-xs text-amber-700 hover:underline"
+                        >
+                          保存提示词（按功能持久化）
+                        </button>
+                        <button
+                          onClick={() => {
+                            setObsSystem(STYLE_OBSERVATION_SYSTEM);
+                            setMergeSystem(STYLE_MERGE_SYSTEM);
+                            setSamplesSystem(STYLE_SAMPLES_SYSTEM);
+                          }}
+                          className="text-xs text-stone-400 hover:text-stone-700"
+                        >
+                          恢复默认提示词
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -362,8 +433,8 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
                       停止
                     </button>
                   ) : (
-                    <button onClick={runExtraction} className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs text-white hover:bg-stone-700">
-                      开始提炼
+                    <button onClick={openExtractionModal} className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs text-white hover:bg-stone-700">
+                      开始提炼（先确认提示词）
                     </button>
                   )}
                   <span className="text-xs text-stone-400">提炼使用：</span>
@@ -446,6 +517,19 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
           )}
         </div>
       </div>
+      {promptModal && (
+        <PromptConfirmModal
+          featureKey="style-observation"
+          title="开始提炼风格"
+          defaultSystem={promptModal.defaultSystem}
+          defaultUser={promptModal.user}
+          meta={promptModal.meta}
+          confirmLabel="开始提炼"
+          busy={extracting}
+          onConfirm={promptModal.onConfirm}
+          onCancel={() => setPromptModal(null)}
+        />
+      )}
     </div>
   );
 }

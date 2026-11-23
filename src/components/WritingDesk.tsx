@@ -9,7 +9,6 @@ import {
   saveDraft,
   deleteDraft,
   approveChapter,
-  updateOutlineEntry,
   saveGeneration,
   updateGenerationStatus,
   getProtagonist,
@@ -19,20 +18,22 @@ import {
   listFuturePresets,
   listRecap,
   listForeshadows,
-  appendRecap,
+  getStoryArc,
+  getRecapLong,
+  getFuturePrediction,
+  saveFuturePrediction,
+  hasApprovedPredecessor,
+  findNextChapter,
 } from "@/lib/library";
-import { streamChat, chatOnce } from "@/lib/llm";
+import { streamChat } from "@/lib/llm";
 import { useFeatureModel } from "@/lib/useProviderSelection";
 import ModelPicker from "./ModelPicker";
-import { assembleGeneration, buildRecapMessages, type AssembledPrompt, type MemoryBundle } from "@/lib/context";
+import PromptConfirmModal, { type PromptConfirmPayload } from "./PromptConfirmModal";
+import MemoryUpdateModal from "./MemoryUpdateModal";
+import { assembleGeneration, type AssembledPrompt, type MemoryBundle } from "@/lib/context";
+import { appendExtra, SELECTION_SYSTEM, SELECTION_TASKS, type SelectionKind } from "@/lib/prompts";
 import { exportWork } from "@/lib/exporter";
-import type { ProjectDoc, WorkOutline, OutlineEntry, StyleDoc } from "@/lib/types";
-
-const SELECTION_PROMPTS: Record<string, string> = {
-  polish: "润色这段文字：提升文笔与节奏，保持原意、情节与人称不变。",
-  expand: "扩写这段文字：增加动作、对话、环境与心理细节，篇幅约为原文的 1.5~2 倍。",
-  rewrite: "重写这段文字：保持剧情功能与信息量不变，换一种写法。",
-};
+import type { ProjectDoc, WorkOutline, OutlineEntry, StyleDoc, FuturePrediction } from "@/lib/types";
 
 export default function WritingDesk({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
   const workId = project.id;
@@ -47,12 +48,25 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
   const [status, setStatus] = useState("");
   const [feedback, setFeedback] = useState("");
   const [showFeedback, setShowFeedback] = useState(false);
-  const [preview, setPreview] = useState<AssembledPrompt | null>(null);
-  const [editSystem, setEditSystem] = useState("");
-  const [editUser, setEditUser] = useState("");
   const [targetLength, setTargetLength] = useState(2500);
   const [tick, setTick] = useState(0);
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [recapMissing, setRecapMissing] = useState(false);
+  const [showMemoryUpdate, setShowMemoryUpdate] = useState(false);
+
+  const [predictionModal, setPredictionModal] = useState<{ pred: FuturePrediction; nextTitle: string } | null>(null);
+  const [predictionDraft, setPredictionDraft] = useState("");
+  const [pendingFeedback, setPendingFeedback] = useState<string | undefined>(undefined);
+
+  const [promptModal, setPromptModal] = useState<{
+    featureKey: string;
+    title: string;
+    system: string;
+    user: string;
+    defaultSystem: string;
+    meta?: string;
+    confirmLabel: string;
+    onConfirm: (p: PromptConfirmPayload) => Promise<void> | void;
+  } | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -81,9 +95,10 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     if (!chId) {
       setDraftText("");
       setHasDraft(false);
+      setRecapMissing(false);
       return;
     }
-    Promise.all([readDraft(workId, chId), readChapterContent(workId, chId)]).then(([draft, chapter]) => {
+    Promise.all([readDraft(workId, chId), readChapterContent(workId, chId), listRecap(workId)]).then(([draft, chapter, recap]) => {
       if (!alive) return;
       if (draft) {
         setDraftText(draft.content);
@@ -98,6 +113,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
         setHasDraft(false);
         setLastGenId(null);
       }
+      setRecapMissing(!!chapter && !recap.some((r) => r.chId === chId));
     });
     return () => {
       alive = false;
@@ -108,7 +124,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     if (!chId || streamingRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
-      await saveDraft(workId, chId!, value);
+      await saveDraft(workId, chId!, value, lastGenId ?? undefined);
       setHasDraft(true);
     }, 800);
   }
@@ -129,9 +145,9 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     return provider;
   }
 
-  async function loadMemoryBundle(): Promise<MemoryBundle> {
+  async function loadMemoryBundle(prediction?: FuturePrediction | null): Promise<MemoryBundle> {
     const o = await getOutline(workId);
-    const [protagonist, characters, worldview, rules, presets, recap, foreshadows] = await Promise.all([
+    const [protagonist, characters, worldview, rules, presets, recap, foreshadows, storyArc, recapLong] = await Promise.all([
       getProtagonist(workId),
       listCharacters(workId),
       listWorldview(workId),
@@ -139,6 +155,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       listFuturePresets(workId),
       listRecap(workId),
       listForeshadows(workId),
+      getStoryArc(workId),
+      getRecapLong(workId),
     ]);
     const idx = o.chapters.findIndex((c) => c.chId === chId);
     let lastChapter: { title: string; tail: string } | null = null;
@@ -149,15 +167,25 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
         break;
       }
     }
-    return { protagonist, characters, worldview, rules, presets, recap, foreshadows, lastChapter };
+    return {
+      protagonist,
+      characters,
+      worldview,
+      rules,
+      presets,
+      recap,
+      foreshadows,
+      lastChapter,
+      storyArc,
+      recapSegments: recapLong.segments,
+      prediction: prediction ?? null,
+    };
   }
 
-  async function buildPrompt(feedbackArg?: string): Promise<AssembledPrompt | null> {
+  async function buildPrompt(feedbackArg?: string, prediction?: FuturePrediction | null): Promise<AssembledPrompt | null> {
     if (!entry) return null;
-    const styleDocs = selectedStyleIds
-      .map((id) => styles.find((s) => s.id === id))
-      .filter((s): s is StyleDoc => !!s);
-    const memory = await loadMemoryBundle();
+    const styleDocs = selectedStyleIds.map((id) => styles.find((s) => s.id === id)).filter((s): s is StyleDoc => !!s);
+    const memory = await loadMemoryBundle(prediction);
     return assembleGeneration({
       project,
       entry,
@@ -169,23 +197,102 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     });
   }
 
-  async function runGeneration(feedbackArg?: string, override?: { system: string; user: string }) {
-    if (!entry) return;
-    const provider = await ensureProvider();
+  async function openPromptModal(feedbackArg: string | undefined, prediction?: FuturePrediction | null) {
+    const provider = ensureProvider();
     if (!provider) return;
-    const assembled = await buildPrompt(feedbackArg);
+    const assembled = await buildPrompt(feedbackArg, prediction);
     if (!assembled) return;
-    // override：来自提示词预览编辑后的最终提示词，按编辑稿生成
-    const finalPrompt: AssembledPrompt = override
-      ? { ...assembled, system: override.system, user: override.user }
-      : assembled;
+    const hasPrediction = !!prediction?.content?.trim();
+    const metaLines: string[] = [
+      `目标约 ${targetLength} 字`,
+      hasPrediction ? "已注入后文预测" : "本章无后文预测（首章或暂无依据）",
+    ];
+    if (feedbackArg) metaLines.push("含作者对上一稿的意见");
+    setPromptModal({
+      featureKey: feedbackArg ? "write-feedback" : "write",
+      title: feedbackArg ? `按意见重新生成 · ${entry?.title ?? ""}` : `生成本章 · ${entry?.title ?? ""}`,
+      system: assembled.system,
+      user: assembled.user,
+      defaultSystem: assembled.system,
+      meta: metaLines.join(" · "),
+      confirmLabel: "按此提示词生成",
+      onConfirm: async (p) => {
+        setPromptModal(null);
+        await runGenerationFromPrompt({ system: p.system, user: appendExtra(p.user, p.extra) }, feedbackArg);
+      },
+    });
+  }
+
+  /** 点「生成本章」的总入口：先判定后文预测，再进提示词确认 */
+  async function startGeneration(feedbackArg?: string, skipPrediction = false) {
+    if (!entry) {
+      setStatus("请先选择章节");
+      return;
+    }
+    const provider = ensureProvider();
+    if (!provider) return;
+
+    setPendingFeedback(feedbackArg);
+
+    if (skipPrediction) {
+      const pred = await getFuturePrediction(workId);
+      // 预测记录只对「它指向的那一章」有效，写别的章节不注入
+      await openPromptModal(feedbackArg, pred && pred.chId === entry.chId ? pred : null);
+      return;
+    }
+
+    const canPredict = await hasApprovedPredecessor(workId, entry.chId);
+    if (!canPredict) {
+      // 首章 / 跳章写 / 前序未采纳：没有可预测依据，直接进提示词确认
+      await openPromptModal(feedbackArg, null);
+      return;
+    }
+
+    const pred = await getFuturePrediction(workId);
+    if (!pred || pred.chId !== entry.chId || !pred.content.trim()) {
+      setStatus("暂无本章的后文预测（可在记忆库「后文预测」填写，或点「更新本章记忆」生成），本次直接生成。");
+      await openPromptModal(feedbackArg, null);
+      return;
+    }
+
+    const edited = pred.editedAt !== null && pred.content !== pred.aiContent;
+    if (edited) {
+      await openPromptModal(feedbackArg, pred);
+      return;
+    }
+
+    const next = await findNextChapter(workId, entry.chId);
+    setPredictionDraft(pred.content);
+    setPredictionModal({ pred, nextTitle: next?.title ?? "下一章" });
+  }
+
+  async function confirmPrediction() {
+    if (!predictionModal) return;
+    const p = predictionModal.pred;
+    const text = predictionDraft.trim();
+    const changed = text !== p.aiContent.trim();
+    const updated: FuturePrediction = {
+      ...p,
+      content: text,
+      editedAt: changed ? Date.now() : p.editedAt,
+      reviewedAt: Date.now(),
+    };
+    await saveFuturePrediction(workId, updated);
+    setPredictionModal(null);
+    await openPromptModal(pendingFeedback, updated);
+  }
+
+  async function runGenerationFromPrompt(finalPrompt: { system: string; user: string }, feedbackArg?: string) {
+    if (!entry) return;
+    const provider = ensureProvider();
+    if (!provider) return;
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     streamingRef.current = true;
     setStreaming(true);
     setShowFeedback(false);
-    setStatus(feedbackArg ? "正在按意见重新生成…" : "正在生成本章…（可随时停止）");
+    setStatus(feedbackArg ? "正在按意见重新生成…（可随时停止）" : "正在生成本章…（可随时停止）");
     let acc = "";
     try {
       await streamChat({
@@ -213,7 +320,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       });
       setLastGenId(rec.id);
       setHasDraft(true);
-      setStatus(`生成完成，共 ${acc.length} 字。可编辑后采纳，或提意见重新生成。`);
+      setStatus(`生成完成，共 ${acc.length} 字。可编辑后采纳，或点「更新本章记忆」补齐前情与设定。`);
       onChanged();
     } catch (e) {
       const aborted = (e as Error)?.name === "AbortError";
@@ -227,7 +334,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
           styleIds: [...selectedStyleIds],
           output: acc,
           feedback: feedbackArg,
-          status: aborted ? "draft" : "draft",
+          status: "draft",
         });
         setHasDraft(true);
       }
@@ -239,17 +346,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     }
   }
 
-  async function runPreview() {
-    const provider = await ensureProvider();
-    if (!provider) return;
-    const assembled = await buildPrompt();
-    if (!assembled) return;
-    setPreview(assembled);
-    setEditSystem(assembled.system);
-    setEditUser(assembled.user);
-    setShowPreviewModal(true);
-  }
-
+  /** 采纳：只写正式章节，不再自动调用任何 AI */
   async function approve() {
     if (!entry || !draftText.trim()) {
       setStatus("当前章节还没有内容");
@@ -257,21 +354,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     }
     await approveChapter(workId, entry.chId, draftText);
     if (lastGenId) await updateGenerationStatus(workId, lastGenId, "approved");
-    setStatus("已采纳为正式章节，正在更新前情记忆…");
+    setStatus("已采纳为正式章节，前情记忆未自动生成。点「更新本章记忆」可一次性更新前情、伏笔、设定与后文预测。");
     onChanged();
-    try {
-      const provider = await ensureProvider();
-      if (provider) {
-        const summary = await chatOnce(
-          provider,
-          buildRecapMessages({ workTitle: project.title, chapterTitle: entry.title, content: draftText }),
-        );
-        await appendRecap(workId, entry.chId, summary);
-        setStatus("已采纳为正式章节，前情记忆已更新");
-      }
-    } catch {
-      setStatus("已采纳为正式章节，但前情记忆生成失败，可稍后在记忆库重试");
-    }
     reload();
   }
 
@@ -287,7 +371,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     reload();
   }
 
-  async function runSelectionOp(kind: string) {
+  /** 选区操作：先快照选中内容，弹窗确认提示词后才真正调用 */
+  function openSelectionModal(kind: SelectionKind) {
     const ta = textareaRef.current;
     if (!ta || !entry) return;
     const start = ta.selectionStart;
@@ -296,17 +381,35 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       setStatus("请先用鼠标选中要处理的文字");
       return;
     }
-    const provider = await ensureProvider();
+    const provider = ensureProvider();
     if (!provider) return;
-    const base = draftText;
-    const selected = base.slice(start, end);
-    const messages = [
-      { role: "system" as const, content: "你是资深小说编辑。只输出处理后的文字本身，不要输出任何解释、引号或前缀。" },
-      {
-        role: "user" as const,
-        content: `【小说】《${project.title}》 ${project.description}\n\n【任务】${SELECTION_PROMPTS[kind]}\n\n【前文】\n${base.slice(Math.max(0, start - 200), start) || "（无）"}\n\n【待处理文字】\n${selected}`,
+    const selected = draftText.slice(start, end);
+    const preface = draftText.slice(Math.max(0, start - 200), start);
+    const user = `【小说】《${project.title}》 ${project.description}\n\n【任务】${SELECTION_TASKS[kind]}\n\n【前文】\n${preface || "（无）"}\n\n【待处理文字】\n${selected}`;
+    setPromptModal({
+      featureKey: "selection",
+      title: `${kind === "polish" ? "润色" : kind === "expand" ? "扩写" : "重写"}选中内容`,
+      system: SELECTION_SYSTEM,
+      user,
+      defaultSystem: SELECTION_SYSTEM,
+      meta: `将替换正文中第 ${start + 1}~${end} 个字符（共 ${selected.length} 字）`,
+      confirmLabel: "开始处理",
+      onConfirm: async (p) => {
+        setPromptModal(null);
+        await runSelectionFromPrompt(start, end, { system: p.system, user: appendExtra(p.user, p.extra) });
       },
-    ];
+    });
+  }
+
+  async function runSelectionFromPrompt(start: number, end: number, finalPrompt: { system: string; user: string }) {
+    if (!entry) return;
+    const provider = ensureProvider();
+    if (!provider) return;
+    if (end > draftText.length) {
+      setStatus("正文在确认前已变动，请重新选中后再试");
+      return;
+    }
+    const base = draftText;
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     streamingRef.current = true;
@@ -316,7 +419,10 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     try {
       await streamChat({
         config: provider,
-        messages,
+        messages: [
+          { role: "system", content: finalPrompt.system },
+          { role: "user", content: finalPrompt.user },
+        ],
         signal: ctrl.signal,
         onDelta: (d) => {
           acc += d;
@@ -358,14 +464,13 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* 章节目录 */}
       <aside className="w-56 shrink-0 overflow-y-auto border-r border-stone-200 bg-stone-50 p-3">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-medium text-stone-500">章节目录</h3>
           <span className="text-xs text-stone-400">{outline.chapters.length} 章</span>
         </div>
         {outline.chapters.length === 0 && (
-          <p className="text-xs text-stone-400">还没有章节，去「大纲」页添加章节并写细纲。</p>
+          <p className="text-xs text-stone-400">还没有章节，去「大纲」页添加或与 AI 讨论生成。</p>
         )}
         {outline.chapters.map((c) => {
           const active = c.chId === chId;
@@ -385,7 +490,6 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
         })}
       </aside>
 
-      {/* 编辑区 */}
       <div className="flex min-h-0 flex-1 flex-col p-4">
         {!entry ? (
           <p className="text-sm text-stone-400">选择或创建一个章节开始写作。</p>
@@ -409,7 +513,15 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               </p>
             )}
 
-            {/* 风格选择 */}
+            {recapMissing && (
+              <p className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                本章还没有前情记忆，下一章的上下文会缺失。
+                <button onClick={() => setShowMemoryUpdate(true)} className="rounded bg-amber-600 px-2 py-1 text-xs text-white hover:bg-amber-500">
+                  去更新本章记忆
+                </button>
+              </p>
+            )}
+
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
               <span className="text-stone-500">风格：</span>
               {styles.length === 0 && <span className="text-stone-400">风格库为空（首页 → 风格库 → 新建并提炼）</span>}
@@ -420,9 +532,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                   <button
                     key={s.id}
                     onClick={() =>
-                      setSelectedStyleIds(
-                        active ? selectedStyleIds.filter((id) => id !== s.id) : [...selectedStyleIds, s.id],
-                      )
+                      setSelectedStyleIds(active ? selectedStyleIds.filter((id) => id !== s.id) : [...selectedStyleIds, s.id])
                     }
                     className={`rounded-full border px-2.5 py-1 ${
                       active
@@ -437,7 +547,6 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               })}
             </div>
 
-            {/* 工具栏 */}
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
               <ModelPicker providers={fm.providers} value={fm.selectedId} onChange={fm.select} disabled={streaming} />
               {streaming ? (
@@ -450,7 +559,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               ) : (
                 <>
                   <button
-                    onClick={() => runGeneration()}
+                    onClick={() => startGeneration()}
                     className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs text-white hover:bg-stone-700"
                   >
                     生成本章
@@ -460,12 +569,6 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                     className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50"
                   >
                     提意见重新生成
-                  </button>
-                  <button
-                    onClick={runPreview}
-                    className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50"
-                  >
-                    预览提示词
                   </button>
                 </>
               )}
@@ -479,7 +582,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                 <button
                   key={k}
                   disabled={streaming}
-                  onClick={() => runSelectionOp(k)}
+                  onClick={() => openSelectionModal(k)}
                   className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50 disabled:opacity-40"
                 >
                   {label}
@@ -491,6 +594,14 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                 className="rounded-lg bg-green-700 px-3 py-1.5 text-xs text-white hover:bg-green-600 disabled:opacity-40"
               >
                 ✓ 采纳为正式章节
+              </button>
+              <button
+                disabled={streaming || !entry.approved}
+                onClick={() => setShowMemoryUpdate(true)}
+                title={entry.approved ? "整合更新本章相关的全部记忆" : "先采纳为正式章节"}
+                className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 hover:bg-amber-100 disabled:opacity-40"
+              >
+                更新本章记忆
               </button>
               {hasDraft && !entry.approved && (
                 <button
@@ -517,10 +628,10 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                   onChange={(e) => setFeedback(e.target.value)}
                 />
                 <button
-                  onClick={() => runGeneration(feedback.trim() || undefined)}
+                  onClick={() => startGeneration(feedback.trim() || undefined, true)}
                   className="mt-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-500"
                 >
-                  按意见重新生成
+                  按意见重新生成（先确认提示词）
                 </button>
               </div>
             )}
@@ -540,7 +651,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
             <textarea
               ref={textareaRef}
               className="min-h-0 flex-1 resize-none rounded-xl border border-stone-200 bg-white p-4 text-sm leading-relaxed"
-              placeholder="点「生成本章」让 AI 按记忆库与风格写作；或直接在此输入。草稿会自动保存。"
+              placeholder="点「生成本章」会先弹出提示词确认窗（可见可编辑），确认后才调用模型；也可直接在此输入。草稿自动保存。"
               value={draftText}
               onChange={(e) => onDraftChange(e.target.value)}
             />
@@ -548,47 +659,63 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
         )}
       </div>
 
-      {/* 提示词预览 */}
-      {showPreviewModal && preview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowPreviewModal(false)}>
-          <div
-            className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {predictionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPredictionModal(null)}>
+          <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-stone-200 px-5 py-3">
-              <h2 className="font-medium">提示词预览与编辑（下方内容可直接修改，改完可直接生成）</h2>
+              <div>
+                <h2 className="font-medium">后文预测 · {predictionModal.nextTitle}</h2>
+                <p className="mt-0.5 text-xs text-stone-400">这份预测由 AI 生成、你还没有修改过，先过目确认再生成正文。</p>
+              </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    setShowPreviewModal(false);
-                    runGeneration(undefined, { system: editSystem, user: editUser });
-                  }}
-                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-500"
-                >
-                  按此提示词生成本章
+                <button onClick={confirmPrediction} className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-500">
+                  确认并继续
                 </button>
-                <button onClick={() => setShowPreviewModal(false)} className="text-sm text-stone-400 hover:text-stone-700">
-                  关闭
+                <button onClick={() => setPredictionModal(null)} className="text-sm text-stone-400 hover:text-stone-700">
+                  取消
                 </button>
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-5 text-xs">
-              <h3 className="mb-1 font-medium text-purple-700">System（可编辑）</h3>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
               <textarea
-                className="mb-4 min-h-64 w-full resize-y whitespace-pre-wrap rounded-lg bg-purple-50 p-3 font-mono leading-relaxed text-stone-800 outline-none focus:ring-1 focus:ring-purple-400"
-                value={editSystem}
-                onChange={(e) => setEditSystem(e.target.value)}
+                className="min-h-56 w-full resize-y rounded-lg border border-stone-300 px-3 py-2 text-sm leading-relaxed"
+                value={predictionDraft}
+                onChange={(e) => setPredictionDraft(e.target.value)}
               />
-              <h3 className="mb-1 font-medium text-blue-700">User（可编辑）</h3>
-              <textarea
-                className="min-h-96 w-full resize-y whitespace-pre-wrap rounded-lg bg-blue-50 p-3 font-mono leading-relaxed text-stone-800 outline-none focus:ring-1 focus:ring-blue-400"
-                value={editUser}
-                onChange={(e) => setEditUser(e.target.value)}
-              />
-              <p className="mt-3 text-stone-400">编辑后的提示词仅本次生成生效；生成历史会完整记录实际发送的内容。</p>
+              <details className="mt-3">
+                <summary className="cursor-pointer text-xs text-stone-400">查看 AI 原始版本（修改后会标记为「已由作者调整」）</summary>
+                <pre className="mt-1 whitespace-pre-wrap rounded bg-stone-50 p-3 text-xs text-stone-500">{predictionModal.pred.aiContent}</pre>
+              </details>
             </div>
           </div>
         </div>
+      )}
+
+      {promptModal && (
+        <PromptConfirmModal
+          featureKey={promptModal.featureKey}
+          title={promptModal.title}
+          defaultSystem={promptModal.defaultSystem}
+          defaultUser={promptModal.user}
+          meta={promptModal.meta}
+          confirmLabel={promptModal.confirmLabel}
+          busy={streaming}
+          onConfirm={promptModal.onConfirm}
+          onCancel={() => setPromptModal(null)}
+        />
+      )}
+
+      {showMemoryUpdate && entry && (
+        <MemoryUpdateModal
+          project={project}
+          entry={entry}
+          content={draftText}
+          onClose={() => setShowMemoryUpdate(false)}
+          onApplied={() => {
+            onChanged();
+            reload();
+          }}
+        />
       )}
     </div>
   );

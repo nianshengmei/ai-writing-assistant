@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { loadConfig, saveConfig, backend } from "@/lib/library";
 import { isTauri } from "@/lib/env";
 import { PROVIDER_PRESETS, newProvider, presetByKey } from "@/lib/presets";
-import { testConnection } from "@/lib/llm";
+import { streamChat } from "@/lib/llm";
+import PromptConfirmModal, { type PromptConfirmPayload } from "./PromptConfirmModal";
+import { appendExtra, TEST_CONNECTION_SYSTEM, TEST_CONNECTION_USER } from "@/lib/prompts";
 import type { StoredConfig, ProviderConfig } from "@/lib/types";
 
 type Page = "about" | "models" | "data";
@@ -32,6 +34,13 @@ export default function SettingsModal({
   const [view, setView] = useState<"list" | "edit">("list");
   const [editingId, setEditingId] = useState<string>(""); // 被编辑的配置 id；"" 表示新添加
   const [testing, setTesting] = useState(false);
+  const [promptModal, setPromptModal] = useState<{
+    featureKey: string;
+    defaultSystem: string;
+    defaultUser: string;
+    meta: string;
+    onConfirm: (p: PromptConfirmPayload) => Promise<void> | void;
+  } | null>(null);
 
   useEffect(() => {
     loadConfig().then(setConfig);
@@ -129,19 +138,42 @@ export default function SettingsModal({
     setStatus({ text: "已设为默认", ok: true });
   }
 
+  /** 测试连接：先弹提示词确认窗，确认后再真正发请求 */
   async function runTest() {
     if (!editing) return;
-    await persist();
-    setTesting(true);
-    setStatus({ text: "测试中…", ok: true });
-    try {
-      const reply = await testConnection(editing);
-      setStatus({ text: `连接成功，模型返回：${reply.slice(0, 80)}`, ok: true });
-    } catch (e) {
-      setStatus({ text: `连接失败：${(e as Error)?.message ?? e}`, ok: false });
-    } finally {
-      setTesting(false);
+    if (!editing.baseURL.trim() || !editing.apiKey.trim() || !editing.model.trim()) {
+      setStatus({ text: "请先填写 Base URL / API Key / 模型名", ok: false });
+      return;
     }
+    const target = { ...editing };
+    setStatus(null);
+    setPromptModal({
+      featureKey: "test-connection",
+      defaultSystem: TEST_CONNECTION_SYSTEM,
+      defaultUser: TEST_CONNECTION_USER,
+      meta: `将向「${target.name}」的 ${target.model} 发送一次真实请求，用于验证 Base URL、API Key 与模型名是否可用。`,
+      onConfirm: async ({ system, user, extra }) => {
+        setPromptModal(null);
+        await persist();
+        setTesting(true);
+        setStatus({ text: "测试中…", ok: true });
+        try {
+          const reply = await streamChat({
+            config: target,
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: appendExtra(user, extra) },
+            ],
+          });
+          const txt = (reply ?? "").trim();
+          setStatus({ text: `连接成功，模型返回：${txt.slice(0, 80) || "（空响应，但请求已通）"}`, ok: true });
+        } catch (e) {
+          setStatus({ text: `连接失败：${(e as Error)?.message ?? e}`, ok: false });
+        } finally {
+          setTesting(false);
+        }
+      },
+    });
   }
 
   async function changeDataRoot() {
@@ -247,6 +279,19 @@ export default function SettingsModal({
           </div>
         </div>
       </div>
+
+      {promptModal && (
+        <PromptConfirmModal
+          featureKey={promptModal.featureKey}
+          defaultSystem={promptModal.defaultSystem}
+          defaultUser={promptModal.defaultUser}
+          meta={promptModal.meta}
+          confirmLabel="确定并测试"
+          busy={testing}
+          onConfirm={promptModal.onConfirm}
+          onCancel={() => setPromptModal(null)}
+        />
+      )}
     </div>
   );
 }
@@ -260,13 +305,13 @@ function AboutPage() {
       <h3 className="text-base font-medium text-stone-800">AI 写作助手</h3>
       <p>一款面向长篇小说创作的本地 AI 写作工具。所有数据以 JSON 文件保存在你选择的数据目录中，可备份、可网盘同步；AI 能力通过 OpenAI 兼容接口接入任意模型服务商。</p>
       <ul className="list-disc space-y-1.5 pl-5 text-xs">
-        <li><b>记忆库</b>：主角、配角、世界观、作者要求、后文预设、伏笔表，外加自动维护的前情记忆——生成时按需注入提示词。</li>
-        <li><b>大纲</b>：章节树 + 每章细纲，AI 可参考上文续推细纲。</li>
-        <li><b>写作台</b>：按章生成草稿（生成 → 编辑 → 提意见重生成 → 采纳为正式章节），生成前可预览并直接修改完整提示词。</li>
+        <li><b>记忆库</b>：主角、配角、世界观（可自定义标签种类、可导入小说原文提取）、作者要求、后文预设、伏笔表，外加分层前情记忆（近 15 章逐章 + 更早每 10 章段摘要）、全文脉络与后文预测。</li>
+        <li><b>大纲</b>：章节树 + 每章细纲，支持与 AI 对话讨论后定稿，也可手动编辑。</li>
+        <li><b>写作台</b>：按章生成草稿（生成 → 编辑 → 提意见重生成 → 采纳），生成前可预览并修改完整提示词；采纳后可一键「更新本章记忆」，把主角 / 配角 / 世界观 / 前情 / 伏笔 / 脉络 / 预测一次性整合回写。</li>
         <li><b>风格库</b>：全局风格独立于作品，支持丢入小说原文让 AI 沉淀风格画像与语言/动作/场面示例，生成时可多风格叠加。</li>
-        <li><b>生成历史</b>：每次模型调用完整落盘，可追溯、可恢复为草稿。</li>
+        <li><b>生成历史</b>：每次模型调用完整落盘（含实际发送的提示词），可追溯、可恢复为草稿。</li>
       </ul>
-      <p className="text-xs text-stone-400">版本 0.1.0 · 数据 100% 本地 · 模型接入完全自定义</p>
+      <p className="text-xs text-stone-400">版本 0.1.1 · 数据 100% 本地 · 模型接入完全自定义</p>
     </div>
   );
 }

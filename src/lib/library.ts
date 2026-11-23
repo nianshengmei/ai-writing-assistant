@@ -19,7 +19,17 @@ import type {
   StoredConfig,
   GenerationRecord,
   ProviderConfig,
+  WorldviewCategoriesDoc,
+  StoryArcDoc,
+  RecapLongDoc,
+  RecapSegment,
+  FuturePrediction,
+  OutlineChatDoc,
+  OutlineChatMessage,
+  PromptOverrides,
+  AiCallRecord,
 } from "./types";
+import { DEFAULT_WORLDVIEW_CATEGORIES } from "./prompts";
 
 const fs = isTauri() ? tauriFs : idbFs;
 
@@ -46,10 +56,17 @@ const P = {
   rules: (w: string) => `${w}/memory/author-rules.json`,
   presets: (w: string) => `${w}/memory/future-presets.json`,
   recap: (w: string) => `${w}/memory/recap.json`,
+  recapLong: (w: string) => `${w}/memory/recap-long.json`,
+  storyArc: (w: string) => `${w}/memory/story-arc.json`,
+  prediction: (w: string) => `${w}/memory/future-prediction.json`,
+  categories: (w: string) => `${w}/memory/worldview-categories.json`,
+  outlineChat: (w: string) => `${w}/outline-chat.json`,
   foreshadows: (w: string) => `${w}/foreshadows.json`,
   draft: (w: string, c: string) => `${w}/drafts/${c}.json`,
   chapter: (w: string, c: string) => `${w}/chapters/${c}.json`,
   generation: (w: string, g: string) => `${w}/generations/${g}.json`,
+  aiCall: (w: string, id: string) => `${w}/ai-calls/${id}.json`,
+  promptOverrides: "prompts.json",
 };
 
 // ---------- 配置 ----------
@@ -102,6 +119,10 @@ export async function createWork(title: string, genre: string, description: stri
   await fs.writeJson(P.presets(id), { presets: [] });
   await fs.writeJson(P.recap(id), { entries: [] });
   await fs.writeJson(P.foreshadows(id), { entries: [] });
+  await fs.writeJson(P.recapLong(id), { segments: [], updatedAt: Date.now() });
+  await fs.writeJson(P.storyArc(id), { mainline: "", stages: "", relations: "", updatedAt: Date.now() });
+  await fs.writeJson(P.categories(id), { categories: [...DEFAULT_WORLDVIEW_CATEGORIES] });
+  await fs.writeJson(P.outlineChat(id), { messages: [], updatedAt: Date.now() });
   return id;
 }
 
@@ -369,4 +390,165 @@ async function syncChapterIndex(workId: string, outline: WorkOutline): Promise<v
     }),
   );
   await indexDB.idxChapters.bulkPut(rows);
+}
+
+// ---------- 世界观标签种类（按作品） ----------
+export async function listWorldviewCategories(workId: string): Promise<string[]> {
+  const doc = await fs.readJson<WorldviewCategoriesDoc>(P.categories(workId));
+  const cats = doc?.categories?.filter((c) => c.trim());
+  return cats?.length ? cats : [...DEFAULT_WORLDVIEW_CATEGORIES];
+}
+
+export async function saveWorldviewCategories(workId: string, categories: string[]): Promise<void> {
+  const clean = [...new Set(categories.map((c) => c.trim()).filter(Boolean))];
+  await fs.writeJson(P.categories(workId), { categories: clean } satisfies WorldviewCategoriesDoc);
+}
+
+// ---------- 长篇记忆：段摘要 / 全文脉络 ----------
+export async function getRecapLong(workId: string): Promise<RecapLongDoc> {
+  return (await fs.readJson<RecapLongDoc>(P.recapLong(workId))) ?? { segments: [], updatedAt: 0 };
+}
+
+export async function saveRecapLong(workId: string, segments: RecapSegment[]): Promise<void> {
+  await fs.writeJson(P.recapLong(workId), { segments, updatedAt: Date.now() } satisfies RecapLongDoc);
+}
+
+export async function getStoryArc(workId: string): Promise<StoryArcDoc> {
+  return (await fs.readJson<StoryArcDoc>(P.storyArc(workId))) ?? { mainline: "", stages: "", relations: "", updatedAt: 0 };
+}
+
+export async function saveStoryArc(workId: string, doc: StoryArcDoc): Promise<void> {
+  await fs.writeJson(P.storyArc(workId), { ...doc, updatedAt: Date.now() } satisfies StoryArcDoc);
+}
+
+// ---------- 后文预测（只存下一章） ----------
+export async function getFuturePrediction(workId: string): Promise<FuturePrediction | null> {
+  return fs.readJson<FuturePrediction>(P.prediction(workId));
+}
+
+export async function saveFuturePrediction(workId: string, pred: FuturePrediction): Promise<void> {
+  await fs.writeJson(P.prediction(workId), pred);
+}
+
+export async function clearFuturePrediction(workId: string): Promise<void> {
+  await fs.deletePath(P.prediction(workId)).catch(() => undefined);
+}
+
+// ---------- 大纲对话（按作品一份历史） ----------
+export async function getOutlineChat(workId: string): Promise<OutlineChatDoc> {
+  return (await fs.readJson<OutlineChatDoc>(P.outlineChat(workId))) ?? { messages: [], updatedAt: 0 };
+}
+
+export async function saveOutlineChat(workId: string, messages: OutlineChatMessage[]): Promise<void> {
+  await fs.writeJson(P.outlineChat(workId), { messages, updatedAt: Date.now() } satisfies OutlineChatDoc);
+}
+
+export async function clearOutlineChat(workId: string): Promise<void> {
+  await fs.writeJson(P.outlineChat(workId), { messages: [], updatedAt: Date.now() } satisfies OutlineChatDoc);
+}
+
+// ---------- 提示词覆盖（全局，按功能 key） ----------
+export async function loadPromptOverrides(): Promise<PromptOverrides> {
+  return (await fs.readJson<PromptOverrides>(P.promptOverrides)) ?? {};
+}
+
+export async function savePromptOverrides(overrides: PromptOverrides): Promise<void> {
+  await fs.writeJson(P.promptOverrides, overrides);
+}
+
+export async function savePromptOverride(featureKey: string, override: { system?: string; extra?: string }): Promise<void> {
+  const all = await loadPromptOverrides();
+  if (!override.system?.trim() && !override.extra?.trim()) delete all[featureKey];
+  else all[featureKey] = override;
+  await savePromptOverrides(all);
+}
+
+// ---------- 前情记忆：可编辑 / 删除 ----------
+export async function saveRecapEntry(workId: string, entry: RecapEntry): Promise<void> {
+  const doc = (await fs.readJson<{ entries: RecapEntry[] }>(P.recap(workId))) ?? { entries: [] };
+  const existing = doc.entries.find((e) => e.chId === entry.chId);
+  if (existing) {
+    existing.summary = entry.summary;
+    existing.createdAt = entry.createdAt || Date.now();
+  } else {
+    doc.entries.push({ ...entry, createdAt: entry.createdAt || Date.now() });
+  }
+  doc.entries.sort((a, b) => a.chId.localeCompare(b.chId));
+  await fs.writeJson(P.recap(workId), doc);
+}
+
+export async function deleteRecapEntry(workId: string, chId: string): Promise<void> {
+  const doc = (await fs.readJson<{ entries: RecapEntry[] }>(P.recap(workId))) ?? { entries: [] };
+  doc.entries = doc.entries.filter((e) => e.chId !== chId);
+  await fs.writeJson(P.recap(workId), doc);
+}
+
+// ---------- 章节位置辅助 ----------
+/** 该章之前是否存在已采纳的章节（决定能不能做后文预测） */
+export async function hasApprovedPredecessor(workId: string, chId: string): Promise<boolean> {
+  const outline = await getOutline(workId);
+  const i = outline.chapters.findIndex((c) => c.chId === chId);
+  if (i <= 0) return false;
+  return outline.chapters.slice(0, i).some((c) => c.approved);
+}
+
+/** 取下一章（用于后文预测的目标） */
+export async function findNextChapter(workId: string, chId: string): Promise<OutlineEntry | null> {
+  const outline = await getOutline(workId);
+  const i = outline.chapters.findIndex((c) => c.chId === chId);
+  if (i < 0) return null;
+  return outline.chapters[i + 1] ?? null;
+}
+
+/** 把讨论生成的大纲合并进 outline.json：已有章节整合保留，新章节追加 */
+export async function mergeOutlineChapters(
+  workId: string,
+  items: { title: string; outline: string }[],
+): Promise<{ added: number; updated: number }> {
+  const outline = await getOutline(workId);
+  const next = [...outline.chapters];
+  let added = 0;
+  let updated = 0;
+  for (let i = 0; i < items.length; i++) {
+    const title = items[i].title?.trim();
+    const text = items[i].outline?.trim();
+    if (i < next.length) {
+      const old = next[i];
+      const newTitle = title || old.title;
+      const newOutline = text || old.outline;
+      if (newTitle !== old.title || newOutline !== old.outline) {
+        next[i] = { ...old, title: newTitle, outline: newOutline };
+        updated++;
+      }
+    } else {
+      next.push({
+        chId: await nextChId({ chapters: next }),
+        title: title || `第${next.length + 1}章`,
+        outline: text ?? "",
+        approved: false,
+      });
+      added++;
+    }
+  }
+  await saveOutline(workId, { ...outline, chapters: next });
+  return { added, updated };
+}
+
+// ---------- 非正文 AI 调用记录 ----------
+export async function saveAiCall(workId: string, rec: Omit<AiCallRecord, "id" | "createdAt">): Promise<AiCallRecord> {
+  const full: AiCallRecord = { ...rec, id: `call-${uid()}`, createdAt: Date.now() };
+  await fs.writeJson(P.aiCall(workId, full.id), full);
+  return full;
+}
+
+export async function listAiCalls(workId: string): Promise<AiCallRecord[]> {
+  const entries = await fs.listDir(`${workId}/ai-calls`);
+  const out: AiCallRecord[] = [];
+  for (const e of entries) {
+    if (e.isDir || !e.name.endsWith(".json")) continue;
+    const r = await fs.readJson<AiCallRecord>(`${workId}/ai-calls/${e.name}`);
+    if (r) out.push(r);
+  }
+  out.sort((a, b) => b.createdAt - a.createdAt);
+  return out;
 }

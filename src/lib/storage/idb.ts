@@ -14,7 +14,9 @@ class FilesDB extends Dexie {
 const db = new FilesDB();
 
 function normalize(rel: string): string {
-  return rel.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const s = rel.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  // "." 表示根目录，映射为空串，否则 listDir(".") 永远拿不到内容
+  return s === "." || s === "./" ? "" : s;
 }
 
 export async function getDataRoot(): Promise<string> {
