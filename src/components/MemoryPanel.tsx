@@ -17,9 +17,10 @@ import {
   saveForeshadows,
   uid,
 } from "@/lib/library";
-import { getSelectedProvider } from "@/lib/useProviderSelection";
+import { useFeatureModel } from "@/lib/useProviderSelection";
 import { chatOnce } from "@/lib/llm";
 import { buildCharacterAssistMessages, buildWorldviewAssistMessages } from "@/lib/context";
+import ModelPicker from "./ModelPicker";
 import type { ProjectDoc, ProtagonistDoc, CharacterEntry, WorldviewEntry, RuleEntry, FuturePreset, RecapEntry, ForeshadowEntry } from "@/lib/types";
 
 type Tab = "protagonist" | "characters" | "worldview" | "rules" | "presets" | "foreshadows" | "recap";
@@ -46,6 +47,8 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   const [foreshadows, setForeshadows] = useState<ForeshadowEntry[]>([]);
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [tick, setTick] = useState(0);
+  const charModel = useFeatureModel("memory-character");
+  const worldModel = useFeatureModel("memory-worldview");
 
   useEffect(() => {
     Promise.all([
@@ -68,9 +71,9 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   }, [workId, tick]);
 
   async function aiFillCharacter(c: CharacterEntry) {
-    const provider = await getSelectedProvider();
+    const provider = charModel.picked;
     if (!provider || !provider.apiKey) {
-      setStatus({ text: "请先在顶栏选择模型（并确认已在设置中配好 API Key）", ok: false });
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
       return;
     }
     setStatus({ text: `正在为「${c.name || "新配角"}」生成设定…`, ok: true });
@@ -88,9 +91,9 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   }
 
   async function aiFillWorldview(w: WorldviewEntry) {
-    const provider = await getSelectedProvider();
+    const provider = worldModel.picked;
     if (!provider || !provider.apiKey) {
-      setStatus({ text: "请先在顶栏选择模型（并确认已在设置中配好 API Key）", ok: false });
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
       return;
     }
     try {
@@ -156,16 +159,20 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
 
       {tab === "characters" && (
         <div className="max-w-3xl space-y-3">
-          <button
-            onClick={() => {
-              const next = [...characters, { id: uid(), name: "", relation: "", content: "" }];
-              setCharacters(next);
-              saveCharacters(workId, next);
-            }}
-            className={btn}
-          >
-            + 添加配角
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const next = [...characters, { id: uid(), name: "", relation: "", content: "" }];
+                setCharacters(next);
+                saveCharacters(workId, next);
+              }}
+              className={btn}
+            >
+              + 添加配角
+            </button>
+            <span className="text-xs text-stone-400">AI 填写使用：</span>
+            <ModelPicker providers={charModel.providers} value={charModel.selectedId} onChange={charModel.select} />
+          </div>
           {characters.map((c) => (
             <div key={c.id} className="rounded-xl border border-stone-200 bg-white p-3">
               <div className="mb-2 flex gap-2">
@@ -199,7 +206,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
 
       {tab === "worldview" && (
         <div className="max-w-3xl space-y-3">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => {
                 const next = [...worldview, { id: uid(), category: "地点", name: "", content: "" }];
@@ -227,6 +234,8 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
                 </option>
               ))}
             </select>
+            <span className="text-xs text-stone-400">AI 填写使用：</span>
+            <ModelPicker providers={worldModel.providers} value={worldModel.selectedId} onChange={worldModel.select} />
           </div>
           {worldview.map((w) => (
             <div key={w.id} className="rounded-xl border border-stone-200 bg-white p-3">

@@ -10,9 +10,10 @@ import {
   moveChapter,
   listRecap,
 } from "@/lib/library";
-import { getSelectedProvider } from "@/lib/useProviderSelection";
+import { useFeatureModel } from "@/lib/useProviderSelection";
 import { streamChat } from "@/lib/llm";
 import { buildOutlineProposeMessages } from "@/lib/context";
+import ModelPicker from "./ModelPicker";
 import type { ProjectDoc, OutlineEntry } from "@/lib/types";
 
 export default function OutlinePanel({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
@@ -23,6 +24,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   const [proposingId, setProposingId] = useState<string | null>(null);
   const [proposal, setProposal] = useState("");
   const [tick, setTick] = useState(0);
+  const outlineModel = useFeatureModel("outline");
 
   useEffect(() => {
     getOutline(workId).then((o) => setEntries(o.chapters));
@@ -38,9 +40,9 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   }
 
   async function propose(index: number, entry: OutlineEntry) {
-    const provider = await getSelectedProvider();
+    const provider = outlineModel.picked;
     if (!provider || !provider.apiKey) {
-      setStatus({ text: "请先在顶栏选择模型（并确认已在设置中配好 API Key）", ok: false });
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
       return;
     }
     setProposingId(entry.chId);
@@ -83,6 +85,8 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
         <button onClick={add} className="rounded-lg bg-stone-900 px-3 py-2 text-sm text-white hover:bg-stone-700">
           + 添加章节
         </button>
+        <span className="self-center text-xs text-stone-400">AI 续推使用：</span>
+        <ModelPicker providers={outlineModel.providers} value={outlineModel.selectedId} onChange={outlineModel.select} />
         {status && (
           <span
             className={`self-center whitespace-pre-wrap break-all text-xs ${
