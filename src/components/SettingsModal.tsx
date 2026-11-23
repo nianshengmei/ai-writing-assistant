@@ -10,7 +10,7 @@ import type { StoredConfig, ProviderConfig } from "@/lib/types";
 export default function SettingsModal({ onClose, onChanged }: { onClose: () => void; onChanged?: () => void }) {
   const [config, setConfig] = useState<StoredConfig | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [dataRoot, setDataRoot] = useState("");
 
   useEffect(() => {
@@ -38,7 +38,7 @@ export default function SettingsModal({ onClose, onChanged }: { onClose: () => v
     if (!config) return;
     const toSave = next ?? config;
     await saveConfig(toSave);
-    setStatus("已保存");
+    setStatus({ text: "已保存", ok: true });
     onChanged?.();
   }
 
@@ -64,12 +64,12 @@ export default function SettingsModal({ onClose, onChanged }: { onClose: () => v
   async function runTest() {
     if (!selected) return;
     await persist();
-    setStatus("测试中…");
+    setStatus({ text: "测试中…", ok: true });
     try {
       const reply = await testConnection(selected);
-      setStatus(`连接成功，模型返回：${reply.slice(0, 50)}`);
+      setStatus({ text: `连接成功，模型返回：${reply.slice(0, 50)}`, ok: true });
     } catch (e) {
-      setStatus(`连接失败：${(e as Error)?.message ?? e}`);
+      setStatus({ text: `连接失败：${(e as Error)?.message ?? e}`, ok: false });
     }
   }
 
@@ -78,7 +78,7 @@ export default function SettingsModal({ onClose, onChanged }: { onClose: () => v
     if (!picked) return;
     await backend.setDataRoot(picked);
     setDataRoot(picked);
-    setStatus("数据目录已更新，作品列表已刷新");
+    setStatus({ text: "数据目录已更新，作品列表已刷新", ok: true });
     onChanged?.();
   }
 
@@ -219,7 +219,11 @@ export default function SettingsModal({ onClose, onChanged }: { onClose: () => v
             </div>
           )}
 
-          {status && <p className="mt-4 text-xs text-stone-500">{status}</p>}
+          {status && (
+            <p className={`mt-4 text-xs ${status.ok ? "text-stone-500" : "rounded-lg bg-red-50 px-3 py-2 text-red-700"}`}>
+              {status.text}
+            </p>
+          )}
         </div>
       </div>
     </div>

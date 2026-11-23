@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认权限：窗口基础能力 + 网络请求（AI 调用）+ 文件对话框",
+  "description": "默认权限：窗口基础能力 + 网络请求（AI 调用，放行任意 http/https 以支持自定义模型服务）+ 文件对话框",
   "windows": ["main"],
-  "permissions": ["core:default", "http:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://**" }, { "url": "http://**" }]
+    }
+  ]
 }
