@@ -31,12 +31,16 @@ npm install
 npm run dev        # 浏览器模式（数据存 IndexedDB 模拟层，便于调试）
 ```
 
-## 打包（Tauri 2，一套代码四端）
+## 打包（无需本地安装 Rust）
 
-需要 Rust 工具链（https://rustup.rs）：
+**方式一：GitHub Actions 云端构建（推荐）**。仓库已内置 `.github/workflows/release.yml`，两种触发方式：
+
+1. **手动构建**：GitHub 仓库页 → Actions → Release → Run workflow，跑完在 Artifacts 里下载各平台安装包（Windows exe/msi、macOS dmg、Linux AppImage/deb、Android APK）；
+2. **发版**：推送 `v*` 标签（如 `git tag v0.1.0 && git push --tags`），自动创建带全部安装包的 Release（草稿状态，确认后发布）。
+
+**方式二：本地构建**（需要 Rust 工具链，https://rustup.rs）：
 
 ```bash
-# 桌面端
 npm run tauri:build          # Windows: exe/msi · macOS: app/dmg · Linux: AppImage/deb
 
 # Android（需 Android SDK + NDK）
@@ -44,7 +48,7 @@ npx tauri android init
 npx tauri android build
 ```
 
-AI 请求经 Tauri HTTP 插件发出（绕过 WebView CORS 限制）；导出经原生保存对话框落盘。
+说明：AI 请求经 Tauri HTTP 插件发出（绕过 WebView CORS 限制）；导出经原生保存对话框落盘。CI 产物未签名——macOS 首次打开需右键 → 打开（或 `xattr -cr xxx.app`），Windows 有 SmartScreen 提示点"仍要运行"即可。
 
 ## 数据目录结构
 
