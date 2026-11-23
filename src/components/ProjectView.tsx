@@ -6,7 +6,7 @@ import WritingDesk from "./WritingDesk";
 import MemoryPanel from "./MemoryPanel";
 import OutlinePanel from "./OutlinePanel";
 import HistoryPanel from "./HistoryPanel";
-import ModelSelector from "./ModelSelector";
+import SettingsModal from "./SettingsModal";
 import type { ProjectDoc } from "@/lib/types";
 
 const TABS = [
@@ -22,6 +22,7 @@ export default function ProjectView({ workId, onBack }: { workId: string; onBack
   const [project, setProject] = useState<ProjectDoc | null>(null);
   const [tab, setTab] = useState<TabKey>("write");
   const [tick, setTick] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     getProject(workId).then(setProject);
@@ -52,7 +53,13 @@ export default function ProjectView({ workId, onBack }: { workId: string; onBack
           ))}
         </nav>
         <div className="ml-auto">
-          <ModelSelector />
+          <button
+            onClick={() => setShowSettings(true)}
+            title="设置（关于 / 模型 / 数据目录）"
+            className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-xs text-stone-600 hover:bg-stone-50"
+          >
+            ⚙ 设置
+          </button>
         </div>
       </header>
       <main className="flex min-h-0 flex-1 flex-col">
@@ -61,6 +68,15 @@ export default function ProjectView({ workId, onBack }: { workId: string; onBack
         {tab === "outline" && <OutlinePanel project={project} onChanged={refresh} />}
         {tab === "history" && <HistoryPanel project={project} onChanged={refresh} />}
       </main>
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onChanged={() => {
+            setTick((t) => t + 1);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -7,7 +7,8 @@ import {
   deleteStyle,
   nextStyleId,
 } from "@/lib/library";
-import { getSelectedProvider } from "@/lib/useProviderSelection";
+import { useFeatureModel } from "@/lib/useProviderSelection";
+import ModelPicker from "./ModelPicker";
 import { streamChat, chatOnce } from "@/lib/llm";
 import {
   buildStyleObservationMessages,
@@ -72,6 +73,7 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
   const [samplesSystem, setSamplesSystem] = useState(STYLE_SAMPLES_SYSTEM);
   const [showPrompts, setShowPrompts] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const extractModel = useFeatureModel("style-extract");
 
   useEffect(() => {
     listStyles().then((s) => {
@@ -152,9 +154,9 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
       setStatus({ text: "请先粘贴素材或导入小说原文 txt 文件", ok: false });
       return;
     }
-    const provider = await getSelectedProvider();
+    const provider = extractModel.picked;
     if (!provider || !provider.apiKey) {
-      setStatus({ text: "请先在设置中配置模型（含 API Key）", ok: false });
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
       return;
     }
     const ctrl = new AbortController();
@@ -351,7 +353,7 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
                   )}
                 </div>
 
-                <div className="mt-2 flex gap-2">
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   {extracting ? (
                     <button
                       onClick={() => abortCtl?.abort()}
@@ -364,6 +366,8 @@ export default function StyleLibraryModal({ onClose }: { onClose: () => void }) 
                       开始提炼
                     </button>
                   )}
+                  <span className="text-xs text-stone-400">提炼使用：</span>
+                  <ModelPicker providers={extractModel.providers} value={extractModel.selectedId} onChange={extractModel.select} disabled={extracting} />
                   {status && (
                   <span
                     className={`whitespace-pre-wrap break-all text-xs ${

@@ -22,7 +22,8 @@ import {
   appendRecap,
 } from "@/lib/library";
 import { streamChat, chatOnce } from "@/lib/llm";
-import { getSelectedProvider } from "@/lib/useProviderSelection";
+import { useFeatureModel } from "@/lib/useProviderSelection";
+import ModelPicker from "./ModelPicker";
 import { assembleGeneration, buildRecapMessages, type AssembledPrompt, type MemoryBundle } from "@/lib/context";
 import { exportWork } from "@/lib/exporter";
 import type { ProjectDoc, WorkOutline, OutlineEntry, StyleDoc } from "@/lib/types";
@@ -117,10 +118,12 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     scheduleSave(value);
   }
 
-  async function ensureProvider() {
-    const provider = await getSelectedProvider();
+  const fm = useFeatureModel("write");
+
+  function ensureProvider() {
+    const provider = fm.picked;
     if (!provider || !provider.apiKey) {
-      setStatus("请先在设置中配置模型（含 API Key）");
+      setStatus("失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择");
       return null;
     }
     return provider;
@@ -436,6 +439,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
 
             {/* 工具栏 */}
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <ModelPicker providers={fm.providers} value={fm.selectedId} onChange={fm.select} disabled={streaming} />
               {streaming ? (
                 <button
                   onClick={() => abortRef.current?.abort()}

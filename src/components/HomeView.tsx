@@ -60,7 +60,7 @@ export default function HomeView({ onOpen }: { onOpen: (id: string) => void }) {
             onClick={() => setSettingsOpen(true)}
             className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm hover:bg-stone-50"
           >
-            设置
+            ⚙ 设置
           </button>
         </div>
       </header>
