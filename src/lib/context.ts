@@ -61,7 +61,10 @@ export interface MemoryBundle {
   presets: FuturePreset[];
   recap: RecapEntry[];
   foreshadows: ForeshadowEntry[];
-  lastChapter: { title: string; tail: string } | null;
+  /** 上一章结尾；draft=true 表示上一章尚未定稿，仅作衔接参考 */
+  lastChapter: { title: string; tail: string; draft?: boolean } | null;
+  /** 当前是否全书第一章 */
+  isFirst: boolean;
 }
 
 export interface AssembleArgs {
@@ -125,9 +128,14 @@ export function assembleGeneration(args: AssembleArgs): AssembledPrompt {
   userParts.push(`【前情记忆】\n${recapText || "（这是开篇，无前情）"}`);
 
   if (memory.lastChapter) {
-    userParts.push(`【上一章《${memory.lastChapter.title}》结尾原文】（请自然衔接，不要重复）\n${memory.lastChapter.tail}`);
-  } else {
+    const note = memory.lastChapter.draft
+      ? "（上一章尚未定稿，以下为其草稿结尾，仅供衔接参考，不必严格承接其中的细节）"
+      : "（请自然衔接，不要重复）";
+    userParts.push(`【上一章《${memory.lastChapter.title}》结尾原文】${note}\n${memory.lastChapter.tail}`);
+  } else if (memory.isFirst) {
     userParts.push("【上一章】（本章为全书第一章）");
+  } else {
+    userParts.push("【上一章】尚无成文内容，请依据前情记忆、后文预设与本章细纲自然开篇，不要等待上一章定稿，也不要重复开篇。");
   }
 
   const openForeshadows = memory.foreshadows.filter((f) => f.status === "open");

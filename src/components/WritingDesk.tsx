@@ -20,6 +20,7 @@ import {
   listRecap,
   listForeshadows,
   appendRecap,
+  addChapterEntry,
 } from "@/lib/library";
 import { streamChat, chatOnce } from "@/lib/llm";
 import { useFeatureModel } from "@/lib/useProviderSelection";
@@ -143,15 +144,31 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       listForeshadows(workId),
     ]);
     const idx = o.chapters.findIndex((c) => c.chId === chId);
-    let lastChapter: { title: string; tail: string } | null = null;
+    let lastChapter: MemoryBundle["lastChapter"] = null;
     for (let i = idx - 1; i >= 0; i--) {
       const c = await readChapterContent(workId, o.chapters[i].chId);
       if (c) {
         lastChapter = { title: o.chapters[i].title, tail: c.content.slice(-500) };
         break;
       }
+      // 上一章还没采纳：用其草稿兜底，标注"未定稿"，避免卡住下一章的写作
+      const d = await readDraft(workId, o.chapters[i].chId);
+      if (d?.content?.trim()) {
+        lastChapter = { title: o.chapters[i].title, tail: d.content.slice(-500), draft: true };
+        break;
+      }
     }
-    return { protagonist, characters, worldview, rules, presets, recap, foreshadows, lastChapter };
+    return {
+      protagonist,
+      characters,
+      worldview,
+      rules,
+      presets,
+      recap,
+      foreshadows,
+      lastChapter,
+      isFirst: idx <= 0,
+    };
   }
 
   async function buildPrompt(feedbackArg?: string): Promise<AssembledPrompt | null> {
@@ -288,6 +305,31 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     reload();
   }
 
+  /** 在末尾新建一章并立刻切过去；不要求上一章已采纳 */
+  async function createChapterAtEnd() {
+    if (streaming) return;
+    const created = await addChapterEntry(workId, "", "");
+    reload();
+    onChanged();
+    setChId(created.chId);
+    setStatus(
+      `已新建「${created.title}」。可直接点「生成本章」；细纲留空也能写（会依据前情与后文预设推进），想补细纲可去「大纲」页。`,
+    );
+  }
+
+  /** 有下一章就切过去，没有就新建 */
+  async function goNextChapter() {
+    if (!outline || !chId || streaming) return;
+    const idx = outline.chapters.findIndex((c) => c.chId === chId);
+    const next = outline.chapters[idx + 1];
+    if (next) {
+      setChId(next.chId);
+      setStatus("");
+      return;
+    }
+    await createChapterAtEnd();
+  }
+
   async function discard() {
     if (!entry) return;
     if (!confirm(`放弃「${entry.title}」的当前草稿？（生成历史会保留记录）`)) return;
@@ -378,8 +420,15 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
           <span className="text-xs text-stone-400">{outline.chapters.length} 章</span>
         </div>
         {outline.chapters.length === 0 && (
-          <p className="text-xs text-stone-400">还没有章节，去「大纲」页添加章节并写细纲。</p>
+          <p className="mb-2 text-xs text-stone-400">还没有章节，点下方「＋ 新章节」开始，或去「大纲」页添加并写细纲。</p>
         )}
+        <button
+          onClick={createChapterAtEnd}
+          disabled={streaming}
+          className="mb-2 w-full rounded-lg border border-dashed border-stone-300 px-2 py-1.5 text-xs text-stone-500 hover:border-stone-400 hover:bg-white disabled:opacity-40"
+        >
+          ＋ 新章节
+        </button>
         {outline.chapters.map((c) => {
           const active = c.chId === chId;
           return (
@@ -504,6 +553,16 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                 className="rounded-lg bg-green-700 px-3 py-1.5 text-xs text-white hover:bg-green-600 disabled:opacity-40"
               >
                 ✓ 采纳为正式章节
+              </button>
+              <button
+                disabled={streaming}
+                onClick={goNextChapter}
+                title="不要求本章已采纳，也可以直接写下一章"
+                className="rounded-lg border border-green-700 bg-green-50 px-3 py-1.5 text-xs text-green-800 hover:bg-green-100 disabled:opacity-40"
+              >
+                {outline.chapters.findIndex((c) => c.chId === chId) < outline.chapters.length - 1
+                  ? "下一章 →"
+                  : "写下一章 →"}
               </button>
               {hasDraft && !entry.approved && (
                 <button
