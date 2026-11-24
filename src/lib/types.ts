@@ -38,15 +38,26 @@ export interface StyleDoc {
   updatedAt: number;
 }
 
+export interface WorkTag {
+  id: string; // tag-main / tag-discard / 自定义
+  name: string;
+  priority: number; // 越大越靠前，展示按此排序
+}
+
 export interface OutlineEntry {
   chId: string; // ch-0001
   title: string;
   outline: string;
   approved: boolean;
+  /** 本章打的标签（WorkTag.id），可多个 */
+  tags?: string[];
+  /** 显式关联的前一章（缺省 = 紧邻上一章） */
+  prevChId?: string | null;
 }
 
 export interface WorkOutline {
   chapters: OutlineEntry[];
+  tags?: WorkTag[];
 }
 
 export interface ProjectDoc {

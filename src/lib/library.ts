@@ -5,6 +5,7 @@ import { indexDB, clearWorkIndex } from "./storage/index";
 import type {
   ProjectDoc,
   WorkOutline,
+  WorkTag,
   OutlineEntry,
   DraftDoc,
   ChapterContent,
@@ -94,7 +95,7 @@ export async function createWork(title: string, genre: string, description: stri
   const now = Date.now();
   const doc: ProjectDoc = { id, title, genre, description, createdAt: now, updatedAt: now };
   await fs.writeJson(P.project(id), doc);
-  await fs.writeJson(P.outline(id), { chapters: [] });
+  await fs.writeJson(P.outline(id), { chapters: [], tags: DEFAULT_TAGS.map((t) => ({ ...t })) });
   await fs.writeJson(P.protagonist(id), { name: "", aliases: "", profile: "", arc: "", notes: "" });
   await fs.writeJson(P.characters(id), { entries: [] });
   await fs.writeJson(P.worldview(id), { entries: [] });
@@ -122,8 +123,28 @@ export async function saveProject(doc: ProjectDoc): Promise<void> {
 }
 
 // ---------- 章节目录（outline.json 为章节目录的事实来源） ----------
+/** 作品初始标签：正章(10) / 废弃(9)，其余标签由用户自建、优先级自定 */
+export const DEFAULT_TAGS: WorkTag[] = [
+  { id: "tag-main", name: "正章", priority: 10 },
+  { id: "tag-discard", name: "废弃", priority: 9 },
+];
+
+/** 读取时兜底：旧数据/缺字段自动补默认标签与章节默认「正章」 */
+function normalizeOutline(o: WorkOutline): WorkOutline {
+  const tags = o.tags?.length ? o.tags : DEFAULT_TAGS.map((t) => ({ ...t }));
+  const chapters = (o.chapters ?? []).map((c) => ({ ...c, tags: c.tags ?? ["tag-main"] }));
+  return { tags, chapters };
+}
+
 export async function getOutline(workId: string): Promise<WorkOutline> {
-  return (await fs.readJson<WorkOutline>(P.outline(workId))) ?? { chapters: [] };
+  return normalizeOutline((await fs.readJson<WorkOutline>(P.outline(workId))) ?? { chapters: [] });
+}
+
+/** 新章节默认打哪个标签：优先「正章」，否则取优先级最高的标签 */
+function defaultChapterTag(outline: WorkOutline): string[] {
+  if (outline.tags?.some((t) => t.id === "tag-main")) return ["tag-main"];
+  const top = [...(outline.tags ?? [])].sort((a, b) => b.priority - a.priority)[0];
+  return top ? [top.id] : [];
 }
 
 export async function saveOutline(workId: string, outline: WorkOutline): Promise<void> {
@@ -145,6 +166,8 @@ export async function addChapterEntry(workId: string, title: string, outlineText
     title: title || `第${outline.chapters.length + 1}章`,
     outline: outlineText,
     approved: false,
+    tags: defaultChapterTag(outline),
+    prevChId: null,
   };
   outline.chapters.push(entry);
   await saveOutline(workId, outline);
@@ -165,9 +188,20 @@ export async function updateOutlineEntry(workId: string, chId: string, patch: Pa
 export async function removeChapterEntry(workId: string, chId: string): Promise<void> {
   const outline = await getOutline(workId);
   outline.chapters = outline.chapters.filter((c) => c.chId !== chId);
+  // 清掉指向被删章节的「关联前一章」引用
+  for (const c of outline.chapters) {
+    if (c.prevChId === chId) c.prevChId = null;
+  }
   await saveOutline(workId, outline);
   await fs.deletePath(P.draft(workId, chId)).catch(() => undefined);
   await fs.deletePath(P.chapter(workId, chId)).catch(() => undefined);
+}
+
+/** 保存作品级标签定义 */
+export async function setWorkTags(workId: string, tags: WorkTag[]): Promise<void> {
+  const outline = await getOutline(workId);
+  outline.tags = tags;
+  await saveOutline(workId, outline);
 }
 
 export async function moveChapter(workId: string, chId: string, dir: -1 | 1): Promise<void> {

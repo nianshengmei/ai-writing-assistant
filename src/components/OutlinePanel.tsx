@@ -8,28 +8,22 @@ import {
   updateOutlineEntry,
   removeChapterEntry,
   moveChapter,
-  listRecap,
 } from "@/lib/library";
-import { useFeatureModel } from "@/lib/useProviderSelection";
-import { streamChat } from "@/lib/llm";
-import { buildOutlineProposeMessages } from "@/lib/context";
-import ModelPicker from "./ModelPicker";
-import PromptEditModal from "./PromptEditModal";
-import type { ProjectDoc, OutlineEntry, ChatMessage } from "@/lib/types";
+import type { ProjectDoc, OutlineEntry, WorkTag } from "@/lib/types";
 
 export default function OutlinePanel({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
   const workId = project.id;
   const [entries, setEntries] = useState<OutlineEntry[]>([]);
+  const [workTags, setWorkTagsState] = useState<WorkTag[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
-  const [proposingId, setProposingId] = useState<string | null>(null);
-  const [proposal, setProposal] = useState("");
   const [tick, setTick] = useState(0);
-  const outlineModel = useFeatureModel("outline");
-  const [promptCtx, setPromptCtx] = useState<{ index: number; entry: OutlineEntry; messages: ChatMessage[] } | null>(null);
 
   useEffect(() => {
-    getOutline(workId).then((o) => setEntries(o.chapters));
+    getOutline(workId).then((o) => {
+      setEntries(o.chapters);
+      setWorkTagsState(o.tags ?? []);
+    });
   }, [workId, tick]);
 
   const reload = () => setTick((t) => t + 1);
@@ -37,51 +31,6 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   async function add() {
     await addChapterEntry(workId, newTitle.trim(), "");
     setNewTitle("");
-    reload();
-    onChanged();
-  }
-
-  /** 第一步：组装提示词并弹出编辑弹窗 */
-  async function openPrompt(index: number, entry: OutlineEntry) {
-    const provider = outlineModel.picked;
-    if (!provider || !provider.apiKey) {
-      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
-      return;
-    }
-    const recap = await listRecap(workId);
-    const messages = buildOutlineProposeMessages({ project, entries, targetIndex: index, recap });
-    setPromptCtx({ index, entry, messages });
-  }
-
-  /** 第二步：按（可能编辑过的）提示词流式生成 */
-  async function runProposal(messages: ChatMessage[]) {
-    const ctx = promptCtx;
-    if (!ctx) return;
-    const provider = outlineModel.picked;
-    if (!provider || !provider.apiKey) {
-      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
-      return;
-    }
-    setPromptCtx(null);
-    setProposingId(ctx.entry.chId);
-    setProposal("");
-    setStatus({ text: "正在续推细纲…", ok: true });
-    try {
-      await streamChat({
-        config: provider,
-        messages,
-        onDelta: (d) => setProposal((p) => p + d),
-      });
-      setStatus(null);
-    } catch (e) {
-      setStatus({ text: `续推失败：${(e as Error)?.message ?? e}`, ok: false });
-    }
-  }
-
-  async function adopt(entry: OutlineEntry) {
-    await updateOutlineEntry(workId, entry.chId, { outline: proposal });
-    setProposingId(null);
-    setProposal("");
     reload();
     onChanged();
   }
@@ -102,8 +51,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
         <button onClick={add} className="rounded-lg bg-stone-900 px-3 py-2 text-sm text-white hover:bg-stone-700">
           + 添加章节
         </button>
-        <span className="self-center text-xs text-stone-400">AI 续推使用：</span>
-        <ModelPicker providers={outlineModel.providers} value={outlineModel.selectedId} onChange={outlineModel.select} />
+        <span className="self-center text-xs text-stone-400">AI 续推细纲已移至「AI讨论」页</span>
         {status && (
           <span
             className={`self-center whitespace-pre-wrap break-all text-xs ${
@@ -115,16 +63,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
         )}
       </div>
 
-      {entries.length === 0 && <p className="text-sm text-stone-400">还没有章节。先添加章节，再为每章填写细纲（生成正文时的核心依据）。</p>}
-
-      {promptCtx && (
-        <PromptEditModal
-          title={`第 ${promptCtx.entry.chId.replace("ch-", "")} 章细纲续推`}
-          messages={promptCtx.messages}
-          onCancel={() => setPromptCtx(null)}
-          onRun={runProposal}
-        />
-      )}
+      {entries.length === 0 && <p className="text-sm text-stone-400">还没有章节。先添加章节，再为每章填写细纲（生成正文时的核心依据）。AI 续推细纲请到「AI讨论」页。</p>}
 
       {entries.map((e, i) => (
         <div key={e.chId} className="mb-3 rounded-xl border border-stone-200 bg-white p-3">
@@ -140,10 +79,26 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
               }}
             />
             {e.approved && <span className="rounded bg-green-50 px-2 py-0.5 text-xs text-green-700">已采纳</span>}
+            {(e.tags ?? [])
+              .map((id) => workTags.find((t) => t.id === id))
+              .filter((t): t is WorkTag => !!t)
+              .sort((a, b) => b.priority - a.priority)
+              .slice(0, 3)
+              .map((t) => (
+                <span
+                  key={t.id}
+                  className={`rounded px-1.5 py-0.5 text-[10px] leading-none ${
+                    t.id === "tag-discard"
+                      ? "bg-red-50 text-red-500"
+                      : t.id === "tag-main"
+                        ? "bg-green-50 text-green-600"
+                        : "bg-purple-50 text-purple-600"
+                  }`}
+                >
+                  {t.name}
+                </span>
+              ))}
             <div className="ml-auto flex gap-1">
-              <button onClick={() => openPrompt(i, e)} className={btn}>
-                AI 续推
-              </button>
               <button
                 onClick={async () => {
                   await moveChapter(workId, e.chId, -1);
@@ -184,20 +139,6 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
               await updateOutlineEntry(workId, e.chId, { outline: ev.target.value });
             }}
           />
-          {proposingId === e.chId && (
-            <div className="mt-2 rounded-lg border border-purple-200 bg-purple-50 p-3">
-              <p className="mb-1 text-xs font-medium text-purple-700">AI 续推建议</p>
-              <pre className="whitespace-pre-wrap text-sm leading-relaxed">{proposal || "生成中…"}</pre>
-              <div className="mt-2 flex gap-2">
-                <button onClick={() => adopt(e)} className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs text-white">
-                  采用
-                </button>
-                <button onClick={() => setProposingId(null)} className={btn}>
-                  放弃
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       ))}
     </div>

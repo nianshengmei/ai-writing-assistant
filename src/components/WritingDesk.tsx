@@ -21,13 +21,15 @@ import {
   listForeshadows,
   appendRecap,
   addChapterEntry,
+  removeChapterEntry,
+  setWorkTags,
 } from "@/lib/library";
 import { streamChat, chatOnce } from "@/lib/llm";
 import { useFeatureModel } from "@/lib/useProviderSelection";
 import ModelPicker from "./ModelPicker";
 import { assembleGeneration, buildRecapMessages, type AssembledPrompt, type MemoryBundle } from "@/lib/context";
 import { exportWork } from "@/lib/exporter";
-import type { ProjectDoc, WorkOutline, OutlineEntry, StyleDoc, ChatMessage } from "@/lib/types";
+import type { ProjectDoc, WorkOutline, WorkTag, OutlineEntry, StyleDoc, ChatMessage } from "@/lib/types";
 import PromptEditModal from "./PromptEditModal";
 
 const SELECTION_PROMPTS: Record<string, string> = {
@@ -56,6 +58,9 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
   const [tick, setTick] = useState(0);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [recapCtx, setRecapCtx] = useState<{ messages: ChatMessage[] } | null>(null);
+  const [showTagForm, setShowTagForm] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagPriority, setNewTagPriority] = useState("5");
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -166,7 +171,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
 
   async function loadMemoryBundle(): Promise<MemoryBundle> {
     const o = await getOutline(workId);
-    const [protagonist, characters, worldview, rules, presets, recap, foreshadows] = await Promise.all([
+    const [protagonist, characters, worldview, rules, presets, recapAll, foreshadows] = await Promise.all([
       getProtagonist(workId),
       listCharacters(workId),
       listWorldview(workId),
@@ -176,20 +181,39 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       listForeshadows(workId),
     ]);
     const idx = o.chapters.findIndex((c) => c.chId === chId);
+    const isDiscarded = (c: OutlineEntry) => (c.tags ?? []).includes("tag-discard");
+
+    // 关联了前一章就从那一章开始回溯；否则从紧邻上一章开始
+    let startIdx = idx - 1;
+    if (entry?.prevChId) {
+      const li = o.chapters.findIndex((c) => c.chId === entry.prevChId);
+      if (li >= 0) startIdx = li;
+    }
     let lastChapter: MemoryBundle["lastChapter"] = null;
-    for (let i = idx - 1; i >= 0; i--) {
-      const c = await readChapterContent(workId, o.chapters[i].chId);
-      if (c) {
-        lastChapter = { title: o.chapters[i].title, tail: c.content.slice(-500) };
+    for (let i = startIdx; i >= 0; i--) {
+      const c = o.chapters[i];
+      // 自动回溯时跳过「废弃」章；显式关联的章节即使是废弃也尊重用户选择
+      if (i !== startIdx || !entry?.prevChId) {
+        if (isDiscarded(c)) continue;
+      }
+      const chap = await readChapterContent(workId, c.chId);
+      if (chap) {
+        lastChapter = { title: c.title, tail: chap.content.slice(-500) };
         break;
       }
       // 上一章还没采纳：用其草稿兜底，标注"未定稿"，避免卡住下一章的写作
-      const d = await readDraft(workId, o.chapters[i].chId);
+      const d = await readDraft(workId, c.chId);
       if (d?.content?.trim()) {
-        lastChapter = { title: o.chapters[i].title, tail: d.content.slice(-500), draft: true };
+        lastChapter = { title: c.title, tail: d.content.slice(-500), draft: true };
         break;
       }
     }
+    // 前情记忆里剔除「废弃」章
+    const validChIds = new Set(o.chapters.filter((c) => !isDiscarded(c)).map((c) => c.chId));
+    const recap = recapAll.filter((r) => validChIds.has(r.chId));
+    // 前面没有任何有效章节时，按"全书第一章"处理
+    const hasValidPrev =
+      !!entry?.prevChId || o.chapters.slice(0, Math.max(idx, 0)).some((c) => !isDiscarded(c));
     return {
       protagonist,
       characters,
@@ -199,7 +223,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       recap,
       foreshadows,
       lastChapter,
-      isFirst: idx <= 0,
+      isFirst: !hasValidPrev,
     };
   }
 
@@ -307,6 +331,13 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       return;
     }
     await approveChapter(workId, entry.chId, draftText);
+    // 采纳为正式章节时打上「正章」标签（同时摘掉「废弃」）
+    const curTags = entry.tags ?? [];
+    if (!curTags.includes("tag-main") || curTags.includes("tag-discard")) {
+      await updateOutlineEntry(workId, entry.chId, {
+        tags: [...new Set([...curTags.filter((t) => t !== "tag-discard"), "tag-main"])],
+      });
+    }
     if (lastGenId) await updateGenerationStatus(workId, lastGenId, "approved");
     setStatus("已采纳为正式章节。前情摘要提示词已弹出，可编辑后生成");
     onChanged();
@@ -364,6 +395,99 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       return;
     }
     await createChapterAtEnd();
+  }
+
+  /** 手动保存草稿：立即落盘，不等防抖 */
+  async function saveDraftNow() {
+    if (!chId || streaming) return;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    pendingSaveRef.current = null;
+    await saveDraft(workId, chId, draftText);
+    setHasDraft(true);
+    setStatus(`草稿已保存（${new Date().toLocaleTimeString("zh-CN", { hour12: false })}）`);
+  }
+
+  // ---------- 标签 ----------
+  const workTags: WorkTag[] = [...(outline?.tags ?? [])].sort((a, b) => b.priority - a.priority);
+
+  function chTagChips(c: OutlineEntry): WorkTag[] {
+    return (c.tags ?? [])
+      .map((id) => outline?.tags?.find((t) => t.id === id))
+      .filter((t): t is WorkTag => !!t)
+      .sort((a, b) => b.priority - a.priority);
+  }
+
+  function tagChipCls(t: WorkTag, active: boolean): string {
+    if (t.id === "tag-discard") {
+      return active
+        ? "border-red-400 bg-red-50 text-red-700"
+        : "border-red-200 bg-white text-red-400 hover:border-red-300";
+    }
+    if (t.id === "tag-main") {
+      return active
+        ? "border-green-500 bg-green-50 text-green-700"
+        : "border-stone-300 bg-white text-stone-500 hover:border-green-300";
+    }
+    return active
+      ? "border-purple-500 bg-purple-50 text-purple-700"
+      : "border-stone-300 bg-white text-stone-500 hover:border-purple-300";
+  }
+
+  async function toggleChapterTag(tagId: string) {
+    if (!entry || !outline) return;
+    const cur = entry.tags ?? [];
+    const next = cur.includes(tagId) ? cur.filter((x) => x !== tagId) : [...cur, tagId];
+    await updateOutlineEntry(workId, entry.chId, { tags: next });
+    reload();
+    onChanged();
+  }
+
+  async function createTag() {
+    const name = newTagName.trim();
+    if (!name || !outline) return;
+    const tags: WorkTag[] = [
+      ...(outline.tags ?? []),
+      { id: `tag-${Date.now().toString(36)}`, name, priority: Number(newTagPriority) || 5 },
+    ];
+    await setWorkTags(workId, tags);
+    setShowTagForm(false);
+    setNewTagName("");
+    setNewTagPriority("5");
+    setStatus(`已创建标签「${name}」`);
+    reload();
+    onChanged();
+  }
+
+  async function setPrevChapter(prevChId: string) {
+    if (!entry) return;
+    await updateOutlineEntry(workId, entry.chId, { prevChId: prevChId || null });
+    setStatus(prevChId ? `本章已关联到指定前一章，生成时将承接该章` : "已恢复默认承接（紧邻上一章）");
+    reload();
+  }
+
+  async function deleteChapter() {
+    if (!entry || !outline || streaming) return;
+    if (!confirm(`删除「${entry.title}」？其草稿与正式章节文件将一并删除，且不可恢复。`)) return;
+    const idx = outline.chapters.findIndex((c) => c.chId === entry.chId);
+    await flushPendingSave();
+    await removeChapterEntry(workId, entry.chId);
+    const rest = (await getOutline(workId)).chapters;
+    const next = rest[Math.min(idx, rest.length - 1)] ?? null;
+    if (next) {
+      await switchChapter(next.chId);
+    } else {
+      chIdRef.current = null;
+      setChId(null);
+      setDraftText("");
+      setHasDraft(false);
+      setLastGenId(null);
+    }
+    setStatus(`已删除「${entry.title}」`);
+    reload();
+    onChanged();
   }
 
   async function discard() {
@@ -467,6 +591,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
         </button>
         {outline.chapters.map((c) => {
           const active = c.chId === chId;
+          const chips = chTagChips(c).slice(0, 3);
           return (
             <button
               key={c.chId}
@@ -478,6 +603,24 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               <span className="mr-1.5 text-xs text-stone-400">{c.chId.replace("ch-", "")}</span>
               {c.title}
               {c.approved && <span className="ml-1 text-xs text-green-600">●</span>}
+              {chips.length > 0 && (
+                <span className="mt-1 flex flex-wrap gap-1">
+                  {chips.map((t) => (
+                    <span
+                      key={t.id}
+                      className={`rounded px-1.5 py-0.5 text-[10px] leading-none ${
+                        t.id === "tag-discard"
+                          ? "bg-red-50 text-red-500"
+                          : t.id === "tag-main"
+                            ? "bg-green-50 text-green-600"
+                            : "bg-purple-50 text-purple-600"
+                      }`}
+                    >
+                      {t.name}
+                    </span>
+                  ))}
+                </span>
+              )}
             </button>
           );
         })}
@@ -505,6 +648,77 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               <p className="mb-2 rounded-lg bg-stone-50 px-3 py-2 text-xs leading-relaxed text-stone-500">
                 细纲：{entry.outline}
               </p>
+            )}
+
+            {/* 标签与承接 */}
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-stone-500">标签：</span>
+              {workTags.map((t) => {
+                const active = (entry.tags ?? []).includes(t.id);
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => void toggleChapterTag(t.id)}
+                    className={`rounded-full border px-2.5 py-1 ${tagChipCls(t, active)}`}
+                    title={`优先级 ${t.priority}`}
+                  >
+                    {t.name}
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => setShowTagForm((v) => !v)}
+                className="rounded-full border border-dashed border-stone-300 px-2.5 py-1 text-stone-400 hover:border-stone-400"
+              >
+                ＋ 新标签
+              </button>
+              <span className="ml-2 text-stone-500">承接：</span>
+              <select
+                className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs"
+                value={entry.prevChId ?? ""}
+                onChange={(e) => void setPrevChapter(e.target.value)}
+                title="生成本章时承接哪一章；默认为紧邻上一章"
+              >
+                <option value="">（默认：紧邻上一章）</option>
+                {outline.chapters
+                  .slice(0, outline.chapters.findIndex((c) => c.chId === entry.chId))
+                  .map((c) => (
+                    <option key={c.chId} value={c.chId}>
+                      {c.title}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            {showTagForm && (
+              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2 text-xs">
+                <input
+                  className="w-32 rounded border border-stone-300 px-2 py-1"
+                  placeholder="标签名称"
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && void createTag()}
+                />
+                <label className="text-stone-500">
+                  优先级
+                  <input
+                    type="number"
+                    className="ml-1 w-16 rounded border border-stone-300 px-2 py-1"
+                    value={newTagPriority}
+                    onChange={(e) => setNewTagPriority(e.target.value)}
+                  />
+                </label>
+                <button
+                  onClick={() => void createTag()}
+                  className="rounded-lg bg-stone-900 px-3 py-1 text-white hover:bg-stone-700"
+                >
+                  创建
+                </button>
+                <button onClick={() => setShowTagForm(false)} className="text-stone-400 hover:text-stone-600">
+                  取消
+                </button>
+                <span className="text-stone-400">优先级越大越靠前（正章 10、废弃 9）</span>
+              </div>
             )}
 
             {/* 风格选择 */}
@@ -600,6 +814,14 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                   ? "下一章 →"
                   : "写下一章 →"}
               </button>
+              <button
+                disabled={streaming}
+                onClick={saveDraftNow}
+                className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-40"
+                title="立即保存当前内容为草稿（平时每 0.8 秒也会自动保存）"
+              >
+                保存草稿
+              </button>
               {hasDraft && !entry.approved && (
                 <button
                   onClick={discard}
@@ -608,6 +830,13 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                   放弃草稿
                 </button>
               )}
+              <button
+                disabled={streaming}
+                onClick={deleteChapter}
+                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 disabled:opacity-40"
+              >
+                删除本章
+              </button>
               <button
                 onClick={handleExport}
                 className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50"
