@@ -6,6 +6,8 @@ export interface ProviderPreset {
   baseURL: string;
   model: string;
   hint: string;
+  /** 接口协议，缺省 openai 兼容 */
+  kind?: "openai" | "claude";
 }
 
 // 预设只是"快速填表"：baseURL 和默认模型名可以后续随便改。
@@ -47,6 +49,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     hint: "小米 MiMo 开放平台（mimo.mi.com）创建 API Key，sk- 开头",
   },
   {
+    key: "claude",
+    label: "Claude（Anthropic）",
+    baseURL: "https://api.anthropic.com",
+    model: "claude-sonnet-4-5",
+    hint: "console.anthropic.com 获取 API Key（sk-ant- 开头），走 Anthropic 官方协议",
+    kind: "claude",
+  },
+  {
     key: "custom",
     label: "自定义（OpenAI 兼容）",
     baseURL: "",
@@ -69,5 +79,6 @@ export function newProvider(presetKey: string): ProviderConfig {
     apiKey: "",
     model: preset?.model ?? "",
     temperature: 0.7,
+    kind: preset?.kind ?? "openai",
   };
 }

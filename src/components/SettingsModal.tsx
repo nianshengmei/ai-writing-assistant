@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { loadConfig, saveConfig, backend } from "@/lib/library";
 import { isTauri } from "@/lib/env";
 import { PROVIDER_PRESETS, newProvider, presetByKey } from "@/lib/presets";
-import { testConnection } from "@/lib/llm";
+import { testConnection, doFetch } from "@/lib/llm";
+import { version as pkgVersion } from "../../package.json";
 import type { StoredConfig, ProviderConfig } from "@/lib/types";
 
 type Page = "about" | "models" | "data";
@@ -254,19 +255,87 @@ export default function SettingsModal({
 // ---------- 新增草稿 id 集合（会话内记忆哪些 id 是尚未保存的新配置） ----------
 const draftIds = new Set<string>();
 
+const RELEASE_API = "https://api.github.com/repos/nianshengmei/ai-writing-assistant/releases/latest";
+
+function cmpVersion(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
 function AboutPage() {
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<{ kind: "latest" | "new" | "error"; text: string; url?: string } | null>(null);
+
+  async function checkUpdate() {
+    setChecking(true);
+    setResult(null);
+    try {
+      const res = await doFetch(RELEASE_API, { headers: { Accept: "application/vnd.github+json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      const remote = String(d.tag_name || "").replace(/^v/, "");
+      if (!remote) throw new Error("无法解析最新版本号");
+      if (cmpVersion(remote, pkgVersion) > 0) {
+        setResult({ kind: "new", text: `发现新版本 v${remote}（当前 v${pkgVersion}）`, url: d.html_url });
+      } else {
+        setResult({ kind: "latest", text: `已是最新版本 v${pkgVersion}` });
+      }
+    } catch (e) {
+      setResult({ kind: "error", text: `检查更新失败：${(e as Error)?.message ?? e}` });
+    } finally {
+      setChecking(false);
+    }
+  }
+
   return (
     <div className="space-y-3 text-sm leading-relaxed text-stone-600">
       <h3 className="text-base font-medium text-stone-800">AI 写作助手</h3>
-      <p>一款面向长篇小说创作的本地 AI 写作工具。所有数据以 JSON 文件保存在你选择的数据目录中，可备份、可网盘同步；AI 能力通过 OpenAI 兼容接口接入任意模型服务商。</p>
+      <p>一款面向长篇小说创作的本地 AI 写作工具。所有数据以 JSON 文件保存在你选择的数据目录中，可备份、可网盘同步；AI 能力支持 OpenAI 兼容接口与 Anthropic Claude 协议，接入任意模型服务商。</p>
       <ul className="list-disc space-y-1.5 pl-5 text-xs">
-        <li><b>记忆库</b>：主角、配角、世界观、作者要求、后文预设、伏笔表，外加自动维护的前情记忆——生成时按需注入提示词。</li>
-        <li><b>大纲</b>：章节树 + 每章细纲，AI 可参考上文续推细纲。</li>
+        <li><b>记忆库</b>：主角、配角、世界观、作者要求、后文预设、伏笔表、章节总结——生成时按需注入提示词。</li>
+        <li><b>AI讨论</b>：多轮对话讨论剧情，勾选消息后可一键整合生成大纲与记忆（对比确认后才写入）。</li>
+        <li><b>大纲</b>：章节树 + 标签体系 + 每章细纲，章节可关联前一章。</li>
         <li><b>写作台</b>：按章生成草稿（生成 → 编辑 → 提意见重生成 → 采纳为正式章节），生成前可预览并直接修改完整提示词。</li>
-        <li><b>风格库</b>：全局风格独立于作品，支持丢入小说原文让 AI 沉淀风格画像与语言/动作/场面示例，生成时可多风格叠加。</li>
+        <li><b>风格库</b>：全局风格独立于作品，支持丢入小说原文让 AI 沉淀风格画像与语言/动作/场面示例（大素材可前/后截断、断点续跑）。</li>
         <li><b>生成历史</b>：每次模型调用完整落盘，可追溯、可恢复为草稿。</li>
       </ul>
-      <p className="text-xs text-stone-400">版本 0.1.4 · 数据 100% 本地 · 模型接入完全自定义</p>
+
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-stone-400">版本 {pkgVersion} · 数据 100% 本地</span>
+        <button
+          onClick={checkUpdate}
+          disabled={checking}
+          className="rounded-lg border border-stone-300 px-2.5 py-1 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-50"
+        >
+          {checking ? "检查中…" : "检查更新"}
+        </button>
+      </div>
+      {result && (
+        <p
+          className={`rounded-lg px-3 py-2 text-xs ${
+            result.kind === "latest"
+              ? "border border-green-200 bg-green-50 text-green-700"
+              : result.kind === "new"
+                ? "border border-amber-300 bg-amber-50 text-amber-800"
+                : "border border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          {result.text}
+          {result.url && (
+            <>
+              {" "}
+              <a href={result.url} target="_blank" rel="noreferrer" className="underline">
+                {result.url}
+              </a>
+            </>
+          )}
+        </p>
+      )}
     </div>
   );
 }
@@ -300,7 +369,7 @@ function ModelsListPage({
         <div className="rounded-xl border border-dashed border-stone-300 p-8 text-center text-xs text-stone-400">
           还没有添加任何模型。
           <br />
-          点击「＋ 添加模型」，支持智谱 GLM / 通义 Qwen / Kimi / DeepSeek / 小米 MiMo 预设，或完全自定义任意 OpenAI 兼容接口。
+          点击「＋ 添加模型」，支持智谱 GLM / 通义 Qwen / Kimi / DeepSeek / 小米 MiMo / Claude 预设，或完全自定义任意 OpenAI 兼容接口。
         </div>
       ) : (
         <div className="space-y-2">
@@ -316,6 +385,7 @@ function ModelsListPage({
                   </p>
                   <p className="truncate font-mono text-xs text-stone-400">
                     {p.model || "未设模型"} · {p.baseURL}
+                    {p.kind === "claude" && " · Claude 协议"}
                   </p>
                 </div>
                 {config.activeId !== p.id && (
@@ -369,7 +439,12 @@ function ModelsEditPage({
           onChange={(e) => {
             const key = e.target.value;
             const np = presetByKey(key);
-            onUpdate({ preset: key, name: np?.label ?? editing.name, baseURL: np?.baseURL ?? editing.baseURL });
+            onUpdate({
+              preset: key,
+              name: np?.label ?? editing.name,
+              baseURL: np?.baseURL ?? editing.baseURL,
+              kind: np?.kind ?? "openai",
+            });
           }}
         >
           {PROVIDER_PRESETS.map((p) => (
@@ -379,6 +454,21 @@ function ModelsEditPage({
           ))}
         </select>
         {preset?.hint && <p className="mt-1 text-xs text-stone-400">{preset.hint}</p>}
+      </div>
+
+      <div className="mb-3">
+        <label className="mb-1 block text-xs text-stone-500">接口协议</label>
+        <select
+          className="rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
+          value={editing.kind ?? "openai"}
+          onChange={(e) => onUpdate({ kind: e.target.value as "openai" | "claude" })}
+        >
+          <option value="openai">OpenAI 兼容（/chat/completions）</option>
+          <option value="claude">Anthropic Claude（/v1/messages）</option>
+        </select>
+        <p className="mt-1 text-xs text-stone-400">
+          大多数国产模型选 OpenAI 兼容；直连 Anthropic 官方或 Claude 网关选 Claude 协议。
+        </p>
       </div>
 
       <div className="grid gap-3 text-sm">
