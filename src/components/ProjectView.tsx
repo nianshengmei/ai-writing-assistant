@@ -6,6 +6,7 @@ import WritingDesk from "./WritingDesk";
 import MemoryPanel from "./MemoryPanel";
 import OutlinePanel from "./OutlinePanel";
 import HistoryPanel from "./HistoryPanel";
+import DiscussionPanel from "./DiscussionPanel";
 import SettingsModal from "./SettingsModal";
 import type { ProjectDoc } from "@/lib/types";
 
@@ -13,6 +14,7 @@ const TABS = [
   { key: "write", label: "写作台" },
   { key: "memory", label: "记忆库" },
   { key: "outline", label: "大纲" },
+  { key: "discuss", label: "AI讨论" },
   { key: "history", label: "生成历史" },
 ] as const;
 
@@ -66,6 +68,7 @@ export default function ProjectView({ workId, onBack }: { workId: string; onBack
         {tab === "write" && <WritingDesk project={project} onChanged={refresh} />}
         {tab === "memory" && <MemoryPanel project={project} onChanged={refresh} />}
         {tab === "outline" && <OutlinePanel project={project} onChanged={refresh} />}
+        {tab === "discuss" && <DiscussionPanel project={project} onChanged={refresh} />}
         {tab === "history" && <HistoryPanel project={project} onChanged={refresh} />}
       </main>
       {showSettings && (
