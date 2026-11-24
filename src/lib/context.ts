@@ -257,7 +257,7 @@ export function buildDiscussMessages(args: {
       role: "system",
       content: `你是资深小说创作顾问，正在与作者讨论《${args.project.title}》（${args.project.genre || "未分类"}）：${args.project.description || "无简介"}。围绕剧情、大纲、世界观、人物设定展开讨论，给出具体、可执行的建议；观点冲突时给出取舍理由。不要输出 JSON。`,
     },
-    ...args.history,
+    ...args.history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: args.userText },
   ];
 }

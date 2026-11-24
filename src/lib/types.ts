@@ -1,11 +1,13 @@
 export interface ProviderConfig {
   id: string;
-  preset: string; // zhipu | qwen | kimi | xiaomi | custom
+  preset: string; // zhipu | qwen | kimi | xiaomi | claude | custom
   name: string;
   baseURL: string;
   apiKey: string;
   model: string;
   temperature: number;
+  /** 接口协议：openai（默认，/chat/completions）| claude（Anthropic /v1/messages） */
+  kind?: "openai" | "claude";
 }
 
 export interface StoredConfig {
@@ -147,4 +149,6 @@ export interface GenerationRecord {
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+  /** 推理模型的思考过程（reasoning_content），仅 UI 展示用，不参与后续请求 */
+  reasoning?: string;
 }

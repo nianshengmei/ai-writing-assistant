@@ -52,6 +52,8 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [genCtx, setGenCtx] = useState<{ kind: GenKind; messages: ChatMessage[] } | null>(null);
   const [compare, setCompare] = useState<CompareState | null>(null);
+  /** 用户手动展开/折叠的思考块（下标 → 是否展开），优先于自动行为 */
+  const [manualFold, setManualFold] = useState<Record<number, boolean>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -80,20 +82,26 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
     setInput("");
     setStreaming(true);
     setStatus(null);
+    setManualFold({});
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
       let acc = "";
+      let reasoning = "";
       await streamChat({
         config: provider,
         messages: buildDiscussMessages({ project, history, userText: text }),
         signal: ctrl.signal,
         onDelta: (d) => {
           acc += d;
-          setMessages([...next, { role: "assistant", content: acc }]);
+          setMessages([...next, { role: "assistant", content: acc, reasoning }]);
+        },
+        onReasoning: (d) => {
+          reasoning += d;
+          setMessages([...next, { role: "assistant", content: acc, reasoning }]);
         },
       });
-      setMessages([...next, { role: "assistant", content: acc }]);
+      setMessages([...next, { role: "assistant", content: acc, reasoning }]);
     } catch (e) {
       const aborted = (e as Error)?.name === "AbortError";
       setStatus({ text: aborted ? "已停止" : `发送失败：${(e as Error)?.message ?? e}`, ok: aborted });
@@ -370,6 +378,25 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
                     : "rounded-tl-sm bg-stone-100 text-stone-800"
               }`}
             >
+              {m.role === "assistant" && m.reasoning && (
+                <details
+                  open={manualFold[i] ?? (streaming && i === messages.length - 1 && !m.content)}
+                  onToggle={(e) => {
+                    const open = (e.target as HTMLDetailsElement).open;
+                    if (open !== (streaming && i === messages.length - 1 && !m.content)) {
+                      setManualFold((prev) => ({ ...prev, [i]: open }));
+                    }
+                  }}
+                  className="mb-1.5 border-b border-stone-200 pb-1.5"
+                >
+                  <summary className="cursor-pointer select-none text-xs text-stone-400">
+                    💭 思考过程{streaming && i === messages.length - 1 && !m.content ? "（进行中）" : ""}
+                  </summary>
+                  <div className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs italic leading-relaxed text-stone-400">
+                    {m.reasoning}
+                  </div>
+                </details>
+              )}
               {m.content || (streaming && i === messages.length - 1 ? "思考中…" : "")}
             </div>
           </div>
