@@ -61,6 +61,8 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
   const abortRef = useRef<AbortController | null>(null);
   const streamingRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chIdRef = useRef<string | null>(null);
+  const pendingSaveRef = useRef<{ chId: string; value: string } | null>(null);
 
   const reload = () => setTick((t) => t + 1);
 
@@ -81,13 +83,14 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
 
   useEffect(() => {
     let alive = true;
-    if (!chId) {
-      setDraftText("");
-      setHasDraft(false);
-      return;
-    }
+    chIdRef.current = chId;
+    // 切换章节立即清空，避免上一章正文/草稿残留到新章
+    setDraftText("");
+    setHasDraft(false);
+    setLastGenId(null);
+    if (!chId) return;
     Promise.all([readDraft(workId, chId), readChapterContent(workId, chId)]).then(([draft, chapter]) => {
-      if (!alive) return;
+      if (!alive || chIdRef.current !== chId) return;
       if (draft) {
         setDraftText(draft.content);
         setHasDraft(true);
@@ -107,12 +110,41 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     };
   }, [workId, chId]);
 
+  /** 把未落盘的防抖编辑立即写回它所属的章节 */
+  async function flushPendingSave() {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const p = pendingSaveRef.current;
+    pendingSaveRef.current = null;
+    if (p) await saveDraft(workId, p.chId, p.value);
+  }
+
+  /** 切章：先落盘旧章，再清空界面状态，避免内容串章 */
+  async function switchChapter(id: string) {
+    if (!id || id === chIdRef.current) return;
+    await flushPendingSave();
+    chIdRef.current = id;
+    setChId(id);
+    setDraftText("");
+    setHasDraft(false);
+    setLastGenId(null);
+    setStatus("");
+  }
+
   function scheduleSave(value: string) {
     if (!chId || streamingRef.current) return;
+    const target = chId;
+    pendingSaveRef.current = { chId: target, value };
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
-      await saveDraft(workId, chId!, value);
-      setHasDraft(true);
+      saveTimerRef.current = null;
+      const p = pendingSaveRef.current;
+      pendingSaveRef.current = null;
+      if (!p) return;
+      await saveDraft(workId, p.chId, p.value);
+      if (chIdRef.current === p.chId) setHasDraft(true);
     }, 800);
   }
 
@@ -305,15 +337,20 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     reload();
   }
 
-  /** 在末尾新建一章并立刻切过去；不要求上一章已采纳 */
+  /** 在末尾新建一章并立刻切过去；不要求上一章已采纳，新章保证是空白 */
   async function createChapterAtEnd() {
     if (streaming) return;
+    await flushPendingSave();
     const created = await addChapterEntry(workId, "", "");
     reload();
     onChanged();
+    chIdRef.current = created.chId;
     setChId(created.chId);
+    setDraftText("");
+    setHasDraft(false);
+    setLastGenId(null);
     setStatus(
-      `已新建「${created.title}」。可直接点「生成本章」；细纲留空也能写（会依据前情与后文预设推进），想补细纲可去「大纲」页。`,
+      `已新建「${created.title}」（空白章）。可直接点「生成本章」；细纲留空也能写（会依据前情与后文预设推进），想补细纲可去「大纲」页。`,
     );
   }
 
@@ -323,8 +360,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     const idx = outline.chapters.findIndex((c) => c.chId === chId);
     const next = outline.chapters[idx + 1];
     if (next) {
-      setChId(next.chId);
-      setStatus("");
+      await switchChapter(next.chId);
       return;
     }
     await createChapterAtEnd();
@@ -434,7 +470,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
           return (
             <button
               key={c.chId}
-              onClick={() => setChId(c.chId)}
+              onClick={() => void switchChapter(c.chId)}
               className={`mb-1 block w-full rounded-lg px-2.5 py-2 text-left text-sm ${
                 active ? "bg-amber-100 text-amber-900" : "text-stone-600 hover:bg-stone-100"
               }`}

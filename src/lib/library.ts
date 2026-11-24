@@ -148,6 +148,9 @@ export async function addChapterEntry(workId: string, title: string, outlineText
   };
   outline.chapters.push(entry);
   await saveOutline(workId, outline);
+  // 新章必须是空白的：清掉同 chId 可能残留的孤儿草稿/正文文件
+  await fs.deletePath(P.draft(workId, entry.chId)).catch(() => undefined);
+  await fs.deletePath(P.chapter(workId, entry.chId)).catch(() => undefined);
   return entry;
 }
 
