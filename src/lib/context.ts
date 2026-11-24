@@ -181,6 +181,9 @@ export function buildRecapMessages(args: { workTitle: string; chapterTitle: stri
 export const STYLE_OBSERVATION_SYSTEM =
   "你是文体分析专家。从给定小说文本片段中提炼写作风格观察，输出中文，逐条罗列，每条一行，聚焦：叙事视角、句式节奏（含平均句长）、对话风格（对话占比、对话标签用法）、描写配比（对话/动作/心理/环境大致比例）、修辞习惯、高频词汇与口头禅、明显避免的写法。只输出观察条目，不要客套话。";
 
+export const STYLE_GROUP_MERGE_SYSTEM =
+  "你是文体分析专家。给定一组风格观察条目，请把它们压缩合并成一份更精炼的观察列表：去掉重复项，保留出现频率高、代表性强的特征，输出中文，逐条罗列，每条一行，总条数不超过原条数的一半且不超过 8 条。只输出观察条目，不要客套话。";
+
 export const STYLE_MERGE_SYSTEM =
   '你是文体分析专家。请把多条风格观察合并为一份统一的风格画像，严格输出 JSON（不要 markdown 代码块包裹），字段如下：\n{"pov":"叙事视角","tone":"文风基调","sentenceRhythm":"句式节奏","dialogueStyle":"对话风格","descriptionRatio":"描写配比","rhetoric":"修辞习惯","vocabularyFavor":"高频词与口头禅","vocabularyAvoid":"避免的用词","pacing":"节奏把控","hooks":"章末钩子习惯","taboos":"写作禁忌"}';
 
@@ -205,6 +208,13 @@ export function styleMergeUser(observations: string[]): string {
 export function buildStyleMergeMessages(observations: string[], systemOverride?: string): ChatMessage[] {
   return [
     { role: "system", content: systemOverride ?? STYLE_MERGE_SYSTEM },
+    { role: "user", content: styleMergeUser(observations) },
+  ];
+}
+
+export function buildStyleGroupMergeMessages(observations: string[], systemOverride?: string): ChatMessage[] {
+  return [
+    { role: "system", content: systemOverride ?? STYLE_GROUP_MERGE_SYSTEM },
     { role: "user", content: styleMergeUser(observations) },
   ];
 }
