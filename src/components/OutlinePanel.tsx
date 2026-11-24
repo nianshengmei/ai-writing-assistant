@@ -14,7 +14,8 @@ import { useFeatureModel } from "@/lib/useProviderSelection";
 import { streamChat } from "@/lib/llm";
 import { buildOutlineProposeMessages } from "@/lib/context";
 import ModelPicker from "./ModelPicker";
-import type { ProjectDoc, OutlineEntry } from "@/lib/types";
+import PromptEditModal from "./PromptEditModal";
+import type { ProjectDoc, OutlineEntry, ChatMessage } from "@/lib/types";
 
 export default function OutlinePanel({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
   const workId = project.id;
@@ -25,6 +26,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   const [proposal, setProposal] = useState("");
   const [tick, setTick] = useState(0);
   const outlineModel = useFeatureModel("outline");
+  const [promptCtx, setPromptCtx] = useState<{ index: number; entry: OutlineEntry; messages: ChatMessage[] } | null>(null);
 
   useEffect(() => {
     getOutline(workId).then((o) => setEntries(o.chapters));
@@ -39,20 +41,35 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
     onChanged();
   }
 
-  async function propose(index: number, entry: OutlineEntry) {
+  /** 第一步：组装提示词并弹出编辑弹窗 */
+  async function openPrompt(index: number, entry: OutlineEntry) {
     const provider = outlineModel.picked;
     if (!provider || !provider.apiKey) {
       setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
       return;
     }
-    setProposingId(entry.chId);
+    const recap = await listRecap(workId);
+    const messages = buildOutlineProposeMessages({ project, entries, targetIndex: index, recap });
+    setPromptCtx({ index, entry, messages });
+  }
+
+  /** 第二步：按（可能编辑过的）提示词流式生成 */
+  async function runProposal(messages: ChatMessage[]) {
+    const ctx = promptCtx;
+    if (!ctx) return;
+    const provider = outlineModel.picked;
+    if (!provider || !provider.apiKey) {
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
+      return;
+    }
+    setPromptCtx(null);
+    setProposingId(ctx.entry.chId);
     setProposal("");
     setStatus({ text: "正在续推细纲…", ok: true });
     try {
-      const recap = await listRecap(workId);
       await streamChat({
         config: provider,
-        messages: buildOutlineProposeMessages({ project, entries, targetIndex: index, recap }),
+        messages,
         onDelta: (d) => setProposal((p) => p + d),
       });
       setStatus(null);
@@ -100,6 +117,15 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
 
       {entries.length === 0 && <p className="text-sm text-stone-400">还没有章节。先添加章节，再为每章填写细纲（生成正文时的核心依据）。</p>}
 
+      {promptCtx && (
+        <PromptEditModal
+          title={`第 ${promptCtx.entry.chId.replace("ch-", "")} 章细纲续推`}
+          messages={promptCtx.messages}
+          onCancel={() => setPromptCtx(null)}
+          onRun={runProposal}
+        />
+      )}
+
       {entries.map((e, i) => (
         <div key={e.chId} className="mb-3 rounded-xl border border-stone-200 bg-white p-3">
           <div className="mb-2 flex items-center gap-2">
@@ -115,7 +141,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
             />
             {e.approved && <span className="rounded bg-green-50 px-2 py-0.5 text-xs text-green-700">已采纳</span>}
             <div className="ml-auto flex gap-1">
-              <button onClick={() => propose(i, e)} className={btn}>
+              <button onClick={() => openPrompt(i, e)} className={btn}>
                 AI 续推
               </button>
               <button

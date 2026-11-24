@@ -21,7 +21,8 @@ import { useFeatureModel } from "@/lib/useProviderSelection";
 import { chatOnce } from "@/lib/llm";
 import { buildCharacterAssistMessages, buildWorldviewAssistMessages } from "@/lib/context";
 import ModelPicker from "./ModelPicker";
-import type { ProjectDoc, ProtagonistDoc, CharacterEntry, WorldviewEntry, RuleEntry, FuturePreset, RecapEntry, ForeshadowEntry } from "@/lib/types";
+import PromptEditModal from "./PromptEditModal";
+import type { ProjectDoc, ProtagonistDoc, CharacterEntry, WorldviewEntry, RuleEntry, FuturePreset, RecapEntry, ForeshadowEntry, ChatMessage } from "@/lib/types";
 
 type Tab = "protagonist" | "characters" | "worldview" | "rules" | "presets" | "foreshadows" | "recap";
 
@@ -49,6 +50,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   const [tick, setTick] = useState(0);
   const charModel = useFeatureModel("memory-character");
   const worldModel = useFeatureModel("memory-worldview");
+  const [fillCtx, setFillCtx] = useState<{ kind: "character" | "worldview"; entry: CharacterEntry | WorldviewEntry; messages: ChatMessage[] } | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -70,37 +72,50 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
     });
   }, [workId, tick]);
 
-  async function aiFillCharacter(c: CharacterEntry) {
+  /** 第一步：组装提示词并弹出编辑弹窗 */
+  function openFillPrompt(c: CharacterEntry) {
     const provider = charModel.picked;
     if (!provider || !provider.apiKey) {
       setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
       return;
     }
-    setStatus({ text: `正在为「${c.name || "新配角"}」生成设定…`, ok: true });
-    try {
-      const text = await chatOnce(
-        provider,
-        buildCharacterAssistMessages({ project, name: c.name, relation: c.relation, existing: characters }),
-      );
-      setCharacters(characters.map((x) => (x.id === c.id ? { ...x, content: text } : x)));
-      await saveCharacters(workId, characters.map((x) => (x.id === c.id ? { ...x, content: text } : x)));
-      setStatus({ text: "已生成并保存", ok: true });
-    } catch (e) {
-      setStatus({ text: `生成失败：${(e as Error)?.message ?? e}`, ok: false });
-    }
+    const messages = buildCharacterAssistMessages({ project, name: c.name, relation: c.relation, existing: characters });
+    setFillCtx({ kind: "character", entry: c, messages });
   }
 
-  async function aiFillWorldview(w: WorldviewEntry) {
+  function openWorldviewFillPrompt(w: WorldviewEntry) {
     const provider = worldModel.picked;
     if (!provider || !provider.apiKey) {
       setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
       return;
     }
+    const messages = buildWorldviewAssistMessages({ project, category: w.category, name: w.name });
+    setFillCtx({ kind: "worldview", entry: w, messages });
+  }
+
+  /** 第二步：按（可能编辑过的）提示词生成并保存 */
+  async function runFill(messages: ChatMessage[]) {
+    const ctx = fillCtx;
+    if (!ctx) return;
+    const provider = ctx.kind === "character" ? charModel.picked : worldModel.picked;
+    if (!provider || !provider.apiKey) {
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
+      return;
+    }
+    setFillCtx(null);
+    const label = ctx.kind === "character" ? (ctx.entry as CharacterEntry).name || "新配角" : (ctx.entry as WorldviewEntry).name || "新条目";
+    setStatus({ text: `正在为「${label}」生成…`, ok: true });
     try {
-      const text = await chatOnce(provider, buildWorldviewAssistMessages({ project, category: w.category, name: w.name }));
-      const next = worldview.map((x) => (x.id === w.id ? { ...x, content: text } : x));
-      setWorldview(next);
-      await saveWorldview(workId, next);
+      const text = await chatOnce(provider, messages);
+      if (ctx.kind === "character") {
+        const next = characters.map((x) => (x.id === ctx.entry.id ? { ...x, content: text } : x));
+        setCharacters(next);
+        await saveCharacters(workId, next);
+      } else {
+        const next = worldview.map((x) => (x.id === ctx.entry.id ? { ...x, content: text } : x));
+        setWorldview(next);
+        await saveWorldview(workId, next);
+      }
       setStatus({ text: "已生成并保存", ok: true });
     } catch (e) {
       setStatus({ text: `生成失败：${(e as Error)?.message ?? e}`, ok: false });
@@ -112,6 +127,14 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-5">
+      {fillCtx && (
+        <PromptEditModal
+          title={fillCtx.kind === "character" ? `配角「${(fillCtx.entry as CharacterEntry).name || "新配角"}」设定生成` : `世界观「${(fillCtx.entry as WorldviewEntry).name || "新条目"}」生成`}
+          messages={fillCtx.messages}
+          onCancel={() => setFillCtx(null)}
+          onRun={runFill}
+        />
+      )}
       <div className="mb-4 flex flex-wrap gap-2">
         {TABS.map((t) => (
           <button
@@ -178,7 +201,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
               <div className="mb-2 flex gap-2">
                 <input className={`${input} w-40`} placeholder="姓名" value={c.name} onChange={(e) => setCharacters(characters.map((x) => (x.id === c.id ? { ...x, name: e.target.value } : x)))} />
                 <input className={`${input} flex-1`} placeholder="与主角关系（如：师尊 / 宿敌 / 挚友）" value={c.relation} onChange={(e) => setCharacters(characters.map((x) => (x.id === c.id ? { ...x, relation: e.target.value } : x)))} />
-                <button onClick={() => aiFillCharacter(c)} className={btn}>
+                <button onClick={() => openFillPrompt(c)} className={btn}>
                   AI 填写
                 </button>
                 <button
@@ -248,7 +271,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
                   ))}
                 </select>
                 <input className={`${input} w-56`} placeholder="名称" value={w.name} onChange={(e) => setWorldview(worldview.map((x) => (x.id === w.id ? { ...x, name: e.target.value } : x)))} />
-                <button onClick={() => aiFillWorldview(w)} className={btn}>
+                <button onClick={() => openWorldviewFillPrompt(w)} className={btn}>
                   AI 填写
                 </button>
                 <button

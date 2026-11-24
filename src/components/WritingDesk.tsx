@@ -26,7 +26,8 @@ import { useFeatureModel } from "@/lib/useProviderSelection";
 import ModelPicker from "./ModelPicker";
 import { assembleGeneration, buildRecapMessages, type AssembledPrompt, type MemoryBundle } from "@/lib/context";
 import { exportWork } from "@/lib/exporter";
-import type { ProjectDoc, WorkOutline, OutlineEntry, StyleDoc } from "@/lib/types";
+import type { ProjectDoc, WorkOutline, OutlineEntry, StyleDoc, ChatMessage } from "@/lib/types";
+import PromptEditModal from "./PromptEditModal";
 
 const SELECTION_PROMPTS: Record<string, string> = {
   polish: "润色这段文字：提升文笔与节奏，保持原意、情节与人称不变。",
@@ -53,6 +54,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
   const [targetLength, setTargetLength] = useState(2500);
   const [tick, setTick] = useState(0);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [recapCtx, setRecapCtx] = useState<{ messages: ChatMessage[] } | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -257,20 +259,31 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     }
     await approveChapter(workId, entry.chId, draftText);
     if (lastGenId) await updateGenerationStatus(workId, lastGenId, "approved");
-    setStatus("已采纳为正式章节，正在更新前情记忆…");
+    setStatus("已采纳为正式章节。前情摘要提示词已弹出，可编辑后生成");
     onChanged();
+    const provider = ensureProvider();
+    if (!provider) {
+      setStatus("已采纳为正式章节，但未配置模型，前情记忆暂未更新");
+      reload();
+      return;
+    }
+    setRecapCtx({
+      messages: buildRecapMessages({ workTitle: project.title, chapterTitle: entry.title, content: draftText }),
+    });
+    reload();
+  }
+
+  async function runRecap(messages: ChatMessage[]) {
+    const provider = ensureProvider();
+    if (!provider) return;
+    setRecapCtx(null);
+    setStatus("正在生成前情摘要…");
     try {
-      const provider = await ensureProvider();
-      if (provider) {
-        const summary = await chatOnce(
-          provider,
-          buildRecapMessages({ workTitle: project.title, chapterTitle: entry.title, content: draftText }),
-        );
-        await appendRecap(workId, entry.chId, summary);
-        setStatus("已采纳为正式章节，前情记忆已更新");
-      }
-    } catch {
-      setStatus("已采纳为正式章节，但前情记忆生成失败，可稍后在记忆库重试");
+      const summary = await chatOnce(provider, messages);
+      if (entry) await appendRecap(workId, entry.chId, summary);
+      setStatus("已采纳为正式章节，前情记忆已更新");
+    } catch (e) {
+      setStatus(`前情摘要生成失败：${(e as Error)?.message ?? e}（章节已采纳，可稍后重试）`);
     }
     reload();
   }
@@ -549,6 +562,17 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       </div>
 
       {/* 提示词预览 */}
+      {recapCtx && (
+        <PromptEditModal
+          title="前情摘要生成（采纳后自动维护）"
+          messages={recapCtx.messages}
+          onCancel={() => {
+            setRecapCtx(null);
+            setStatus("已采纳为正式章节，前情记忆暂未更新");
+          }}
+          onRun={runRecap}
+        />
+      )}
       {showPreviewModal && preview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowPreviewModal(false)}>
           <div
