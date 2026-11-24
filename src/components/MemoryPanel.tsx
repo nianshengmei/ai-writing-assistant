@@ -13,16 +13,20 @@ import {
   listFuturePresets,
   saveFuturePresets,
   listRecap,
+  appendRecap,
+  getOutline,
+  readChapterContent,
+  readDraft,
   listForeshadows,
   saveForeshadows,
   uid,
 } from "@/lib/library";
 import { useFeatureModel } from "@/lib/useProviderSelection";
 import { chatOnce } from "@/lib/llm";
-import { buildCharacterAssistMessages, buildWorldviewAssistMessages } from "@/lib/context";
+import { buildCharacterAssistMessages, buildWorldviewAssistMessages, buildRecapMessages } from "@/lib/context";
 import ModelPicker from "./ModelPicker";
 import PromptEditModal from "./PromptEditModal";
-import type { ProjectDoc, ProtagonistDoc, CharacterEntry, WorldviewEntry, RuleEntry, FuturePreset, RecapEntry, ForeshadowEntry, ChatMessage } from "@/lib/types";
+import type { ProjectDoc, ProtagonistDoc, CharacterEntry, WorldviewEntry, RuleEntry, FuturePreset, RecapEntry, ForeshadowEntry, OutlineEntry, ChatMessage } from "@/lib/types";
 
 type Tab = "protagonist" | "characters" | "worldview" | "rules" | "presets" | "foreshadows" | "recap";
 
@@ -33,7 +37,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "rules", label: "作者要求" },
   { key: "presets", label: "后文预设" },
   { key: "foreshadows", label: "伏笔表" },
-  { key: "recap", label: "前情记忆" },
+  { key: "recap", label: "章节总结" },
 ];
 
 export default function MemoryPanel({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
@@ -45,12 +49,15 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   const [rules, setRules] = useState<RuleEntry[]>([]);
   const [presets, setPresets] = useState<FuturePreset[]>([]);
   const [recap, setRecap] = useState<RecapEntry[]>([]);
+  const [chapters, setChapters] = useState<OutlineEntry[]>([]);
   const [foreshadows, setForeshadows] = useState<ForeshadowEntry[]>([]);
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [tick, setTick] = useState(0);
   const charModel = useFeatureModel("memory-character");
   const worldModel = useFeatureModel("memory-worldview");
+  const recapModel = useFeatureModel("recap");
   const [fillCtx, setFillCtx] = useState<{ kind: "character" | "worldview"; entry: CharacterEntry | WorldviewEntry; messages: ChatMessage[] } | null>(null);
+  const [recapCtx, setRecapCtx] = useState<{ chId: string; title: string; messages: ChatMessage[] } | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -61,7 +68,8 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
       listFuturePresets(workId),
       listRecap(workId),
       listForeshadows(workId),
-    ]).then(([p, c, w, r, fp, rc, fo]) => {
+      getOutline(workId),
+    ]).then(([p, c, w, r, fp, rc, fo, o]) => {
       setProtagonist(p);
       setCharacters(c);
       setWorldview(w);
@@ -69,6 +77,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
       setPresets(fp);
       setRecap(rc);
       setForeshadows(fo);
+      setChapters(o.chapters);
     });
   }, [workId, tick]);
 
@@ -122,6 +131,45 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
     }
   }
 
+  /** 章节总结：第一步，取章节正文组装提示词并弹出编辑弹窗 */
+  async function openRecapPrompt(ch: OutlineEntry) {
+    const provider = recapModel.picked;
+    if (!provider || !provider.apiKey) {
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
+      return;
+    }
+    const chapter = await readChapterContent(workId, ch.chId);
+    const draft = chapter ? null : await readDraft(workId, ch.chId);
+    const content = chapter?.content ?? draft?.content ?? "";
+    if (!content.trim()) {
+      setStatus({ text: `「${ch.title}」还没有正文（既无正式章节也无草稿），无法生成总结`, ok: false });
+      return;
+    }
+    const messages = buildRecapMessages({ workTitle: project.title, chapterTitle: ch.title, content });
+    setRecapCtx({ chId: ch.chId, title: ch.title, messages });
+  }
+
+  /** 章节总结：第二步，按（可能编辑过的）提示词生成并保存 */
+  async function runRecapGen(messages: ChatMessage[]) {
+    const ctx = recapCtx;
+    if (!ctx) return;
+    const provider = recapModel.picked;
+    if (!provider || !provider.apiKey) {
+      setStatus({ text: "失败：请先在右上角 ⚙ 设置 → 模型 中添加模型，并在本页选择", ok: false });
+      return;
+    }
+    setRecapCtx(null);
+    setStatus({ text: `正在生成「${ctx.title}」的章节总结…`, ok: true });
+    try {
+      const summary = await chatOnce(provider, messages);
+      await appendRecap(workId, ctx.chId, summary);
+      setRecap(await listRecap(workId));
+      setStatus({ text: `「${ctx.title}」章节总结已生成（${summary.length} 字）`, ok: true });
+    } catch (e) {
+      setStatus({ text: `总结生成失败：${(e as Error)?.message ?? e}`, ok: false });
+    }
+  }
+
   const input = "rounded-lg border border-stone-300 px-3 py-2 text-sm";
   const btn = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs hover:bg-stone-50";
 
@@ -133,6 +181,14 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
           messages={fillCtx.messages}
           onCancel={() => setFillCtx(null)}
           onRun={runFill}
+        />
+      )}
+      {recapCtx && (
+        <PromptEditModal
+          title={`「${recapCtx.title}」章节总结生成（100字左右）`}
+          messages={recapCtx.messages}
+          onCancel={() => setRecapCtx(null)}
+          onRun={runRecapGen}
         />
       )}
       <div className="mb-4 flex flex-wrap gap-2">
@@ -421,17 +477,56 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
       )}
 
       {tab === "recap" && (
-        <div className="max-w-2xl">
-          <p className="mb-3 text-xs text-stone-400">
-            前情记忆由系统自动维护：每采纳一章，AI 自动生成本章摘要追加于此。生成正文时会作为上下文注入。
-          </p>
-          {recap.length === 0 && <p className="text-sm text-stone-400">暂无前情（采纳第一章后自动生成）。</p>}
-          {recap.map((r) => (
-            <div key={r.chId} className="mb-2 rounded-lg border border-stone-200 bg-white p-3 text-sm">
-              <span className="mr-2 text-xs font-medium text-stone-500">{r.chId.replace("ch-", "第") + "章"}</span>
-              {r.summary}
-            </div>
-          ))}
+        <div className="max-w-3xl">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <p className="flex-1 text-xs text-stone-400">
+              章节总结与章节目录一一对应：采纳为正式章节时自动打「正章」标签并生成约 100 字总结；也可在此手动编辑或对任意章节重新生成。生成正文时按顺序注入前情记忆。
+            </p>
+            <span className="text-xs text-stone-400">总结生成使用：</span>
+            <ModelPicker providers={recapModel.providers} value={recapModel.selectedId} onChange={recapModel.select} />
+          </div>
+          {chapters.length === 0 && <p className="text-sm text-stone-400">还没有章节，先去写作台或大纲页添加章节。</p>}
+          {chapters.map((ch) => {
+            const summary = recap.find((r) => r.chId === ch.chId)?.summary ?? "";
+            const discarded = (ch.tags ?? []).includes("tag-discard");
+            return (
+              <div key={ch.chId} className="mb-2 rounded-xl border border-stone-200 bg-white p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="text-xs text-stone-400">{ch.chId.replace("ch-", "")}</span>
+                  <span className="text-sm font-medium">{ch.title}</span>
+                  {discarded && <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-500">废弃</span>}
+                  {ch.approved && <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-700">已采纳</span>}
+                  {!summary && !ch.approved && <span className="text-[10px] text-stone-400">未生成总结</span>}
+                  <button onClick={() => void openRecapPrompt(ch)} className={`${btn} ml-auto`}>
+                    {summary ? "重新生成" : "生成总结"}
+                  </button>
+                </div>
+                <textarea
+                  className={`${input} min-h-16 w-full text-sm`}
+                  placeholder="本章总结（约100字）：关键事件、人物关系变化、新伏笔、结尾状态…"
+                  value={summary}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setRecap((prev) =>
+                      prev.some((r) => r.chId === ch.chId)
+                        ? prev.map((r) => (r.chId === ch.chId ? { ...r, summary: v } : r))
+                        : [...prev, { chId: ch.chId, summary: v, createdAt: Date.now() }],
+                    );
+                  }}
+                  onBlur={async (e) => {
+                    if (e.target.value.trim() && e.target.value !== recap.find((r) => r.chId === ch.chId)?.summary) {
+                      await appendRecap(workId, ch.chId, e.target.value.trim());
+                    }
+                  }}
+                />
+              </div>
+            );
+          })}
+          {recap.some((r) => !chapters.some((c) => c.chId === r.chId)) && (
+            <p className="mt-2 text-xs text-stone-400">
+              另有 {recap.filter((r) => !chapters.some((c) => c.chId === r.chId)).length} 条已删除章节的历史总结（不参与生成）。
+            </p>
+          )}
         </div>
       )}
     </div>

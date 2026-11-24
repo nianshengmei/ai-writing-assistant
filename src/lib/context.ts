@@ -172,7 +172,7 @@ export function buildRecapMessages(args: { workTitle: string; chapterTitle: stri
     { role: "system", content: "你是小说编辑助手。只输出摘要内容本身，不要任何前缀或解释。" },
     {
       role: "user",
-      content: `请用第三人称将《${args.workTitle}》的「${args.chapterTitle}」压缩为 100~200 字的前情摘要，必须涵盖：关键事件、人物关系变化、新埋设的伏笔、本章结尾状态。直接输出摘要。\n\n【正文】\n${args.content.slice(0, 6000)}`,
+      content: `请用第三人称将《${args.workTitle}》的「${args.chapterTitle}」压缩为 100 字左右的前情摘要（80~120字），必须涵盖：关键事件、人物关系变化、新埋设的伏笔、本章结尾状态。直接输出摘要。\n\n【正文】\n${args.content.slice(0, 6000)}`,
     },
   ];
 }
@@ -218,6 +218,174 @@ export function buildStyleSamplesMessages(materialChunk: string, systemOverride?
     { role: "system", content: systemOverride ?? STYLE_SAMPLES_SYSTEM },
     { role: "user", content: styleSamplesUser(materialChunk) },
   ];
+}
+
+// ---------- AI 讨论室 ----------
+/** 截取最近 rounds 轮（一轮 = 作者一条 + 顾问一条）对话 */
+export function lastRounds(messages: ChatMessage[], rounds: number): ChatMessage[] {
+  let users = 0;
+  let start = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      users++;
+      if (users > rounds) {
+        start = i + 1;
+        break;
+      }
+    }
+  }
+  return messages.slice(start);
+}
+
+export function buildDiscussMessages(args: {
+  project: ProjectDoc;
+  history: ChatMessage[];
+  userText: string;
+}): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `你是资深小说创作顾问，正在与作者讨论《${args.project.title}》（${args.project.genre || "未分类"}）：${args.project.description || "无简介"}。围绕剧情、大纲、世界观、人物设定展开讨论，给出具体、可执行的建议；观点冲突时给出取舍理由。不要输出 JSON。`,
+    },
+    ...args.history,
+    { role: "user", content: args.userText },
+  ];
+}
+
+function discussBlock(history: ChatMessage[], rounds = 20): string {
+  const msgs = lastRounds(history, rounds);
+  if (!msgs.length) return "（尚无讨论记录，请仅依据原记忆与作品信息整合）";
+  return msgs
+    .map((m) => `${m.role === "user" ? "作者" : "顾问"}：${m.content}`)
+    .join("\n");
+}
+
+const MERGE_SYSTEM = "你是小说设定整理助手。只输出一个合法的 JSON，不要输出解释、注释或 Markdown 代码块标记。";
+const KEEP_RULE = "【铁律】原记忆必须完整保留：讨论中未涉及的内容一律原样保留，不得丢失、删减或简化；只整合讨论中明确涉及的变更。";
+
+export function buildProtagonistMergeMessages(args: {
+  project: ProjectDoc;
+  current: ProtagonistDoc;
+  history: ChatMessage[];
+}): ChatMessage[] {
+  const c = args.current;
+  return [
+    { role: "system", content: MERGE_SYSTEM },
+    {
+      role: "user",
+      content: `【作品】《${args.project.title}》（${args.project.genre || "未分类"}）${args.project.description || ""}
+
+【当前主角记忆（原记忆）】
+姓名：${c.name || "（空）"}
+别名：${c.aliases || "（空）"}
+人设：${c.profile || "（空）"}
+成长线：${c.arc || "（空）"}
+备注：${c.notes || "（空）"}
+
+【近期讨论记录】
+${discussBlock(args.history)}
+
+${KEEP_RULE}
+
+【任务】整合讨论结论与原记忆，输出更新后的完整主角记忆 JSON 对象：
+{"name":"姓名","aliases":"别名/称呼","profile":"人设：外貌、性格、能力、来历","arc":"成长线","notes":"备注"}`,
+    },
+  ];
+}
+
+export function buildCharactersMergeMessages(args: {
+  project: ProjectDoc;
+  current: CharacterEntry[];
+  history: ChatMessage[];
+}): ChatMessage[] {
+  const cur = args.current.length
+    ? args.current.map((c) => `- ${c.name || "（未命名）"}（${c.relation || "关系未定"}）：${c.content}`).join("\n")
+    : "（暂无配角记忆）";
+  return [
+    { role: "system", content: MERGE_SYSTEM },
+    {
+      role: "user",
+      content: `【作品】《${args.project.title}》（${args.project.genre || "未分类"}）${args.project.description || ""}
+
+【当前配角记忆（原记忆）】
+${cur}
+
+【近期讨论记录】
+${discussBlock(args.history)}
+
+${KEEP_RULE}
+
+【任务】整合讨论结论与原记忆，输出更新后的完整配角列表 JSON 数组（包含所有原配角和讨论新增的配角）：
+[{"name":"姓名","relation":"与主角关系","content":"设定内容：背景、性格、当前处境、伏笔潜力"}]`,
+    },
+  ];
+}
+
+export function buildWorldviewMergeMessages(args: {
+  project: ProjectDoc;
+  current: WorldviewEntry[];
+  history: ChatMessage[];
+}): ChatMessage[] {
+  const cur = args.current.length
+    ? args.current.map((w) => `- [${w.category}] ${w.name}：${w.content}`).join("\n")
+    : "（暂无世界观条目）";
+  return [
+    { role: "system", content: MERGE_SYSTEM },
+    {
+      role: "user",
+      content: `【作品】《${args.project.title}》（${args.project.genre || "未分类"}）${args.project.description || ""}
+
+【当前世界观记忆（原记忆）】
+${cur}
+
+【近期讨论记录】
+${discussBlock(args.history)}
+
+${KEEP_RULE}
+
+【任务】整合讨论结论与原记忆，输出更新后的完整世界观条目 JSON 数组（包含所有原条目和讨论新增的条目）：
+[{"category":"地点|势力|规则|物品|体系|其他","name":"名称","content":"设定内容"}]`,
+    },
+  ];
+}
+
+export function buildOutlineMergeMessages(args: {
+  project: ProjectDoc;
+  entries: OutlineEntry[];
+  history: ChatMessage[];
+}): ChatMessage[] {
+  const cur = args.entries.length
+    ? args.entries.map((e) => `- [${e.chId}] ${e.title}：${e.outline || "（无细纲）"}`).join("\n")
+    : "（暂无章节）";
+  return [
+    { role: "system", content: MERGE_SYSTEM },
+    {
+      role: "user",
+      content: `【作品】《${args.project.title}》（${args.project.genre || "未分类"}）${args.project.description || ""}
+
+【当前章节大纲（原大纲）】
+${cur}
+
+【近期讨论记录】
+${discussBlock(args.history)}
+
+${KEEP_RULE}
+
+【任务】整合讨论结论与现有大纲，输出完整大纲 JSON 数组：已有章节沿用原 chId（可更新其标题/细纲），讨论中新增的章节 chId 填 null：
+[{"chId":"ch-0001 或 null","title":"章节标题","outline":"本章细纲：核心冲突、推进点、章末钩子"}]`,
+    },
+  ];
+}
+
+/** 从模型输出中提取 JSON（容忍代码块标记与前后杂质） */
+export function extractJson(text: string): unknown {
+  const cleaned = text.replace(/```[a-zA-Z]*\s*/g, "").trim();
+  const starts = [cleaned.indexOf("{"), cleaned.indexOf("[")].filter((i) => i >= 0);
+  if (!starts.length) throw new Error("输出中未找到 JSON");
+  const start = Math.min(...starts);
+  const end = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+  if (end <= start) throw new Error("输出中未找到完整的 JSON");
+  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
 // ---------- 大纲续推 ----------
