@@ -29,7 +29,6 @@ import {
 import ModelPicker from "./ModelPicker";
 import PromptEditModal from "./PromptEditModal";
 import MemoryCompareModal from "./MemoryCompareModal";
-import StreamingGenModal from "./StreamingGenModal";
 import type {
   ProjectDoc,
   ProtagonistDoc,
@@ -53,17 +52,20 @@ interface CompareState {
   payload: unknown;
 }
 
-/** 整合生成的流式渲染状态（弹窗展示） */
+/** 整合生成的运行状态（生成过程直接写入对话气泡，本状态用于解析/修复/失败弹窗） */
 interface GenRunState {
   kind: GenKind;
+  /** 生成所在会话与 assistant 气泡下标（流式更新 / 重试复用） */
+  sid: string;
+  bubbleIdx: number;
   /** 本次生成使用的提示词（供「重试」复用） */
   messages: ChatMessage[];
   raw: string;
   reasoning: string;
   done: boolean;
   error: string | null;
-  /** 用户已点「查看原始输出」关掉失败弹窗 */
-  dismissed: boolean;
+  /** gen=首轮生成；repair=解析失败后的自动修复轮 */
+  phase: "gen" | "repair";
 }
 
 export default function DiscussionPanel({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
@@ -263,64 +265,139 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
       : "（暂无章节）";
   }
 
+  /** 生成走对话触发：自动发送指令气泡，模型回复以对话气泡流式呈现 */
   async function runGen(messages2: ChatMessage[], kindOverride?: GenKind) {
     const kind = kindOverride ?? genCtx?.kind;
     if (!kind) return;
+    if (!ensureProvider()) return;
+    setGenCtx(null);
+    const d0 = discRef.current;
+    if (!d0) return;
+    const sid = d0.activeId;
+    const s0 = d0.sessions.find((s) => s.id === sid);
+    if (!s0) return;
+    // 自动发送：往当前对话追加指令气泡 + assistant 占位气泡
+    patchSession(sid, (s) => ({
+      ...s,
+      messages: [
+        ...s.messages,
+        {
+          role: "user",
+          content: `⚙ 整合生成${GEN_TITLES[kind]}（基于勾选 ${selected.length} 条讨论 + 当前原记忆，提示词已在弹窗中确认）`,
+        },
+        { role: "assistant", content: "" },
+      ],
+    }));
+    const s1 = discRef.current?.sessions.find((x) => x.id === sid);
+    if (!s1) return;
+    await generateInto(kind, sid, s1.messages.length - 1, messages2);
+  }
+
+  /** 在指定会话的指定气泡里执行生成 → 解析（失败自动修复一轮）→ 对比弹窗 */
+  async function generateInto(kind: GenKind, sid: string, bubbleIdx: number, messages2: ChatMessage[]) {
     const provider = ensureProvider();
     if (!provider) return;
-    setGenCtx(null);
     setGenerating(true);
-    // 流式渲染状态：生成全程在弹窗中可见
     const runRef: GenRunState = {
       kind,
+      sid,
+      bubbleIdx,
       messages: messages2,
       raw: "",
       reasoning: "",
       done: false,
       error: null,
-      dismissed: false,
+      phase: "gen",
     };
     const push = () => setGenRun({ ...runRef });
-    setGenRun({ ...runRef });
+    push();
     const ctrl = new AbortController();
     genAbort.current = ctrl;
+    setStreaming(true); // 复用对话流式状态：输入区显示「停止」，且期间禁止再次发送
+    // 把当前 raw/reasoning 写回 assistant 气泡（流式期间不落盘，结束时统一落盘）
+    const writeBubble = () => {
+      patchSession(
+        sid,
+        (s) => ({
+          ...s,
+          messages: s.messages.map((m, i) =>
+            i === bubbleIdx
+              ? { role: "assistant" as const, content: runRef.raw, reasoning: runRef.reasoning || undefined }
+              : m,
+          ),
+        }),
+        false,
+      );
+    };
+    let ok = false;
+    let lastParseError = "";
+    let attemptRaw = "";
     try {
-      await streamChat({
-        config: provider,
-        messages: messages2,
-        signal: ctrl.signal,
-        onDelta: (d) => {
-          runRef.raw += d;
+      for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+        if (attempt === 1) {
+          // 自动修复轮：把上一轮原始输出与解析错误发回给模型，让它修复
+          runRef.phase = "repair";
+          runRef.raw = "";
+          runRef.reasoning = "";
+          runRef.messages = [
+            ...messages2,
+            { role: "assistant", content: attemptRaw },
+            {
+              role: "user",
+              content: `你上一轮的输出无法解析为合法 JSON（错误：${lastParseError}）。请重新输出修复后的完整 JSON：结构与字段与最初要求完全一致，只输出 JSON 本身，不要解释、不要代码块标记，不要遗漏任何原有内容。`,
+            },
+          ];
           push();
-        },
-        onReasoning: (d) => {
-          runRef.reasoning += d;
-          push();
-        },
-      });
-      runRef.done = true;
-      // 解析模型输出 → 对比弹窗（解析失败时把模型原始输出留在窗口里，方便排查/重试）
-      try {
-        const data = extractJson(runRef.raw);
-        const compareState = await buildCompare(kind, data);
-        setStatus(null);
-        setCompare(compareState);
-        setGenRun(null); // 成功后关掉流式窗口，进入对比确认
-      } catch (pe) {
-        runRef.error = `结果解析失败：${(pe as Error)?.message ?? pe}\n模型输出未生成有效的 JSON（可能被截断或夹带说明文字），下方是模型原始输出。可关闭后点生成按钮、修改提示词重试。`;
+        }
+        await streamChat({
+          config: provider,
+          messages: runRef.messages,
+          signal: ctrl.signal,
+          onDelta: (d) => {
+            runRef.raw += d;
+            writeBubble();
+            push();
+          },
+          onReasoning: (d) => {
+            runRef.reasoning += d;
+            writeBubble();
+            push();
+          },
+        });
+        attemptRaw = runRef.raw;
+        try {
+          const data = extractJson(runRef.raw);
+          const compareState = await buildCompare(kind, data);
+          setStatus(null);
+          setCompare(compareState);
+          ok = true;
+        } catch (pe) {
+          lastParseError = (pe as Error)?.message ?? String(pe);
+        }
+      }
+      if (!ok) {
+        runRef.done = true;
+        runRef.error = `解析失败：${lastParseError}\n${runRef.phase === "repair" ? "自动修复后仍未得到合法 JSON。" : ""}模型原始输出已保留在上方对话气泡中，可点「重试生成」再试一次，或关闭后修改提示词重新生成。`;
         push();
       }
     } catch (e) {
       const aborted = (e as Error)?.name === "AbortError";
-      runRef.done = true;
-      runRef.error = aborted
-        ? "已停止生成。"
-        : `请求失败：${(e as Error)?.message ?? e}\n可关闭后点生成按钮重试，或到 设置 → 模型 里测试连接。`;
-      push();
-      if (!aborted) setStatus({ text: `整合失败：${(e as Error)?.message ?? e}`, ok: false });
+      if (aborted) {
+        setStatus({ text: "已停止生成", ok: true });
+        setGenRun(null); // 主动停止：不弹失败窗，气泡保留已生成部分
+      } else {
+        runRef.done = true;
+        runRef.error = `请求失败：${(e as Error)?.message ?? e}\n可点「重试生成」再试，或到 设置 → 模型 里测试连接。`;
+        push();
+        setStatus({ text: `整合失败：${(e as Error)?.message ?? e}`, ok: false });
+      }
     } finally {
+      setStreaming(false);
       setGenerating(false);
       genAbort.current = null;
+      if (ok) setGenRun(null);
+      // 生成轮结束，强制落盘一次（气泡内容已变更）
+      if (discRef.current) void saveDiscussions(workId, discRef.current);
     }
   }
 
@@ -660,34 +737,12 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
         />
       )}
 
-      {/* 整合生成：流式渲染过程（生成全程可见，可停止） */}
-      {genRun && (
-        <StreamingGenModal
-          title={`整合生成${GEN_TITLES[genRun.kind]}`}
-          raw={genRun.raw}
-          reasoning={genRun.reasoning}
-          running={!genRun.done}
-          error={genRun.dismissed ? null : genRun.error}
-          notice={
-            genRun.done
-              ? genRun.dismissed
-                ? "结果未解析成功。可关闭后重新点生成按钮、修改提示词重试。"
-                : genRun.error
-                  ? ""
-                  : "生成完成，已进入对比确认窗口。"
-              : "生成全程流式可见；推理模型思考阶段正文可能迟迟不出，属正常现象。"
-          }
-          onStop={() => genAbort.current?.abort()}
-          onClose={() => setGenRun(null)}
-        />
-      )}
-
-      {/* 解析失败 / 请求失败：明确的弹窗提醒（叠加在流式窗口之上） */}
-      {genRun && genRun.done && genRun.error && !genRun.dismissed && (
+      {/* 解析失败 / 请求失败：明确的弹窗提醒（生成过程与原始输出已在对应对话气泡中） */}
+      {genRun && genRun.done && genRun.error && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-stone-50 p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="flex items-center gap-2 font-medium text-red-600">
-              ⚠ {genRun.raw ? "生成结果解析失败" : "生成请求失败"}
+              ⚠ {genRun.raw ? (genRun.phase === "repair" ? "自动修复后仍解析失败" : "生成结果解析失败") : "生成请求失败"}
             </h3>
             <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-all text-xs leading-relaxed text-stone-600">
               {genRun.error}
@@ -700,18 +755,10 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
                 关闭
               </button>
               <button
-                onClick={() => setGenRun({ ...genRun, dismissed: true })}
-                className="rounded-lg border border-stone-300 px-3 py-1.5 text-xs hover:bg-stone-50"
-                disabled={!genRun.raw}
-                title="留在流式窗口查看模型原始输出"
-              >
-                查看原始输出
-              </button>
-              <button
                 onClick={() => {
-                  const { kind, messages } = genRun;
+                  const { kind, sid, bubbleIdx, messages } = genRun;
                   setGenRun(null);
-                  void runGen(messages, kind);
+                  void generateInto(kind, sid, bubbleIdx, messages);
                 }}
                 className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs text-white hover:bg-stone-700"
               >

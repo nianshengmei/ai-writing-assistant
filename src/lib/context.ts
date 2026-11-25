@@ -270,7 +270,8 @@ function discussBlock(history: ChatMessage[], rounds = 20): string {
     .join("\n");
 }
 
-const MERGE_SYSTEM = "你是小说设定整理助手。只输出一个合法的 JSON，不要输出解释、注释或 Markdown 代码块标记。";
+const MERGE_SYSTEM =
+  "你是小说设定整理助手。只输出一个合法的 JSON：以 { 或 [ 开头、以 } 或 ] 结尾，字符串一律用双引号，不得包含注释、尾随逗号或任何解释文字，也不要用 Markdown 代码块包裹。记忆保存的格式以本条消息给出的字段为准，一个字都不能改。";
 const KEEP_RULE = "【铁律】原记忆必须完整保留：讨论中未涉及的内容一律原样保留，不得丢失、删减或简化；只整合讨论中明确涉及的变更。";
 
 export function buildProtagonistMergeMessages(args: {
@@ -387,7 +388,7 @@ ${KEEP_RULE}
   ];
 }
 
-/** 从模型输出中提取 JSON（容忍代码块标记与前后杂质） */
+/** 从模型输出中提取 JSON（容忍代码块标记、前后杂质与尾随逗号等常见小毛病） */
 export function extractJson(text: string): unknown {
   const cleaned = text.replace(/```[a-zA-Z]*\s*/g, "").trim();
   const starts = [cleaned.indexOf("{"), cleaned.indexOf("[")].filter((i) => i >= 0);
@@ -395,7 +396,14 @@ export function extractJson(text: string): unknown {
   const start = Math.min(...starts);
   const end = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
   if (end <= start) throw new Error("输出中未找到完整的 JSON");
-  return JSON.parse(cleaned.slice(start, end + 1));
+  const slice = cleaned.slice(start, end + 1);
+  try {
+    return JSON.parse(slice);
+  } catch {
+    // 常见小毛病：尾随逗号
+    const fixed = slice.replace(/,\s*([}\]])/g, "$1");
+    return JSON.parse(fixed);
+  }
 }
 
 // ---------- 大纲续推 ----------
