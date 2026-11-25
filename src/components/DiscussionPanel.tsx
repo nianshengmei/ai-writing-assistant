@@ -15,7 +15,7 @@ import {
   saveDiscussions,
   uid,
 } from "@/lib/library";
-import { streamChat, chatOnce } from "@/lib/llm";
+import { streamChat } from "@/lib/llm";
 import { useFeatureModel } from "@/lib/useProviderSelection";
 import {
   buildDiscussMessages,
@@ -29,6 +29,7 @@ import {
 import ModelPicker from "./ModelPicker";
 import PromptEditModal from "./PromptEditModal";
 import MemoryCompareModal from "./MemoryCompareModal";
+import StreamingGenModal from "./StreamingGenModal";
 import type {
   ProjectDoc,
   ProtagonistDoc,
@@ -52,6 +53,19 @@ interface CompareState {
   payload: unknown;
 }
 
+/** 整合生成的流式渲染状态（弹窗展示） */
+interface GenRunState {
+  kind: GenKind;
+  /** 本次生成使用的提示词（供「重试」复用） */
+  messages: ChatMessage[];
+  raw: string;
+  reasoning: string;
+  done: boolean;
+  error: string | null;
+  /** 用户已点「查看原始输出」关掉失败弹窗 */
+  dismissed: boolean;
+}
+
 export default function DiscussionPanel({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
   const workId = project.id;
   const dm = useFeatureModel("discuss");
@@ -65,6 +79,9 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
   const [generating, setGenerating] = useState(false);
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [genCtx, setGenCtx] = useState<{ kind: GenKind; messages: ChatMessage[] } | null>(null);
+  /** 整合生成过程中的流式渲染（非 null 时显示流式弹窗） */
+  const [genRun, setGenRun] = useState<GenRunState | null>(null);
+  const genAbort = useRef<AbortController | null>(null);
   const [compare, setCompare] = useState<CompareState | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -246,87 +263,132 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
       : "（暂无章节）";
   }
 
-  async function runGen(messages2: ChatMessage[]) {
-    const kind = genCtx?.kind;
+  async function runGen(messages2: ChatMessage[], kindOverride?: GenKind) {
+    const kind = kindOverride ?? genCtx?.kind;
     if (!kind) return;
     const provider = ensureProvider();
     if (!provider) return;
     setGenCtx(null);
     setGenerating(true);
-    setStatus({ text: `正在整合生成${GEN_TITLES[kind]}…`, ok: true });
+    // 流式渲染状态：生成全程在弹窗中可见
+    const runRef: GenRunState = {
+      kind,
+      messages: messages2,
+      raw: "",
+      reasoning: "",
+      done: false,
+      error: null,
+      dismissed: false,
+    };
+    const push = () => setGenRun({ ...runRef });
+    setGenRun({ ...runRef });
+    const ctrl = new AbortController();
+    genAbort.current = ctrl;
     try {
-      const raw = await chatOnce(provider, messages2);
-      const data = extractJson(raw);
-      let compareState: CompareState;
-      if (kind === "protagonist") {
-        const old = await getProtagonist(workId);
-        const next = data as ProtagonistDoc;
-        compareState = {
-          kind,
-          title: "主角记忆：原记忆 vs 整合结果",
-          original: fmtProtagonist(old),
-          proposed: fmtProtagonist(next),
-          payload: next,
-        };
-      } else if (kind === "characters") {
-        const old = await listCharacters(workId);
-        const next = (Array.isArray(data) ? data : []).map((c: Partial<CharacterEntry>) => ({
-          id: "",
-          name: String(c.name ?? ""),
-          relation: String(c.relation ?? ""),
-          content: String(c.content ?? ""),
-        }));
-        compareState = {
-          kind,
-          title: "配角记忆：原记忆 vs 整合结果",
-          original: fmtCharacters(old),
-          proposed: fmtCharacters(next),
-          payload: next,
-        };
-      } else if (kind === "worldview") {
-        const old = await listWorldview(workId);
-        const next = (Array.isArray(data) ? data : []).map((w: Partial<WorldviewEntry>) => ({
-          id: "",
-          category: String(w.category ?? "其他"),
-          name: String(w.name ?? ""),
-          content: String(w.content ?? ""),
-        }));
-        compareState = {
-          kind,
-          title: "世界观：原记忆 vs 整合结果",
-          original: fmtWorldview(old),
-          proposed: fmtWorldview(next),
-          payload: next,
-        };
-      } else {
-        const o = await getOutline(workId);
-        const next = (Array.isArray(data) ? data : []).map((e: { chId?: string | null; title?: string; outline?: string }) => ({
-          chId: e.chId && o.chapters.some((c) => c.chId === e.chId) ? e.chId : null,
-          title: String(e.title ?? ""),
-          outline: String(e.outline ?? ""),
-        }));
-        compareState = {
-          kind,
-          title: "章节大纲：原大纲 vs 整合结果（新增章节将自动创建）",
-          original: fmtOutline(o.chapters),
-          proposed: fmtOutline(
-            next.map((e, i) => ({
-              chId: e.chId ?? `new-${i + 1}`,
-              title: e.title,
-              outline: e.outline,
-              approved: false,
-            })),
-          ),
-          payload: next,
-        };
+      await streamChat({
+        config: provider,
+        messages: messages2,
+        signal: ctrl.signal,
+        onDelta: (d) => {
+          runRef.raw += d;
+          push();
+        },
+        onReasoning: (d) => {
+          runRef.reasoning += d;
+          push();
+        },
+      });
+      runRef.done = true;
+      // 解析模型输出 → 对比弹窗（解析失败时把模型原始输出留在窗口里，方便排查/重试）
+      try {
+        const data = extractJson(runRef.raw);
+        const compareState = await buildCompare(kind, data);
+        setStatus(null);
+        setCompare(compareState);
+        setGenRun(null); // 成功后关掉流式窗口，进入对比确认
+      } catch (pe) {
+        runRef.error = `结果解析失败：${(pe as Error)?.message ?? pe}\n模型输出未生成有效的 JSON（可能被截断或夹带说明文字），下方是模型原始输出。可关闭后点生成按钮、修改提示词重试。`;
+        push();
       }
-      setStatus(null);
-      setCompare(compareState);
     } catch (e) {
-      setStatus({ text: `整合失败：${(e as Error)?.message ?? e}（可点「放弃」修改提示词重试）`, ok: false });
+      const aborted = (e as Error)?.name === "AbortError";
+      runRef.done = true;
+      runRef.error = aborted
+        ? "已停止生成。"
+        : `请求失败：${(e as Error)?.message ?? e}\n可关闭后点生成按钮重试，或到 设置 → 模型 里测试连接。`;
+      push();
+      if (!aborted) setStatus({ text: `整合失败：${(e as Error)?.message ?? e}`, ok: false });
     } finally {
       setGenerating(false);
+      genAbort.current = null;
     }
+  }
+
+  /** 由模型返回的 JSON 构建对比弹窗状态（供 runGen 调用） */
+  async function buildCompare(kind: GenKind, data: unknown): Promise<CompareState> {
+    if (kind === "protagonist") {
+      const old = await getProtagonist(workId);
+      const next = data as ProtagonistDoc;
+      return {
+        kind,
+        title: "主角记忆：原记忆 vs 整合结果",
+        original: fmtProtagonist(old),
+        proposed: fmtProtagonist(next),
+        payload: next,
+      };
+    }
+    if (kind === "characters") {
+      const old = await listCharacters(workId);
+      const next = (Array.isArray(data) ? data : []).map((c: Partial<CharacterEntry>) => ({
+        id: "",
+        name: String(c.name ?? ""),
+        relation: String(c.relation ?? ""),
+        content: String(c.content ?? ""),
+      }));
+      return {
+        kind,
+        title: "配角记忆：原记忆 vs 整合结果",
+        original: fmtCharacters(old),
+        proposed: fmtCharacters(next),
+        payload: next,
+      };
+    }
+    if (kind === "worldview") {
+      const old = await listWorldview(workId);
+      const next = (Array.isArray(data) ? data : []).map((w: Partial<WorldviewEntry>) => ({
+        id: "",
+        category: String(w.category ?? "其他"),
+        name: String(w.name ?? ""),
+        content: String(w.content ?? ""),
+      }));
+      return {
+        kind,
+        title: "世界观：原记忆 vs 整合结果",
+        original: fmtWorldview(old),
+        proposed: fmtWorldview(next),
+        payload: next,
+      };
+    }
+    const o = await getOutline(workId);
+    const next = (Array.isArray(data) ? data : []).map((e: { chId?: string | null; title?: string; outline?: string }) => ({
+      chId: e.chId && o.chapters.some((c) => c.chId === e.chId) ? e.chId : null,
+      title: String(e.title ?? ""),
+      outline: String(e.outline ?? ""),
+    }));
+    return {
+      kind,
+      title: "章节大纲：原大纲 vs 整合结果（新增章节将自动创建）",
+      original: fmtOutline(o.chapters),
+      proposed: fmtOutline(
+        next.map((e, i) => ({
+          chId: e.chId ?? `new-${i + 1}`,
+          title: e.title,
+          outline: e.outline,
+          approved: false,
+        })),
+      ),
+      payload: next,
+    };
   }
 
   // ---------- 合并确认（作者点头才落盘） ----------
@@ -596,6 +658,68 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
           onCancel={() => setGenCtx(null)}
           onRun={runGen}
         />
+      )}
+
+      {/* 整合生成：流式渲染过程（生成全程可见，可停止） */}
+      {genRun && (
+        <StreamingGenModal
+          title={`整合生成${GEN_TITLES[genRun.kind]}`}
+          raw={genRun.raw}
+          reasoning={genRun.reasoning}
+          running={!genRun.done}
+          error={genRun.dismissed ? null : genRun.error}
+          notice={
+            genRun.done
+              ? genRun.dismissed
+                ? "结果未解析成功。可关闭后重新点生成按钮、修改提示词重试。"
+                : genRun.error
+                  ? ""
+                  : "生成完成，已进入对比确认窗口。"
+              : "生成全程流式可见；推理模型思考阶段正文可能迟迟不出，属正常现象。"
+          }
+          onStop={() => genAbort.current?.abort()}
+          onClose={() => setGenRun(null)}
+        />
+      )}
+
+      {/* 解析失败 / 请求失败：明确的弹窗提醒（叠加在流式窗口之上） */}
+      {genRun && genRun.done && genRun.error && !genRun.dismissed && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-stone-50 p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="flex items-center gap-2 font-medium text-red-600">
+              ⚠ {genRun.raw ? "生成结果解析失败" : "生成请求失败"}
+            </h3>
+            <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-all text-xs leading-relaxed text-stone-600">
+              {genRun.error}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setGenRun(null)}
+                className="rounded-lg border border-stone-300 px-3 py-1.5 text-xs hover:bg-stone-50"
+              >
+                关闭
+              </button>
+              <button
+                onClick={() => setGenRun({ ...genRun, dismissed: true })}
+                className="rounded-lg border border-stone-300 px-3 py-1.5 text-xs hover:bg-stone-50"
+                disabled={!genRun.raw}
+                title="留在流式窗口查看模型原始输出"
+              >
+                查看原始输出
+              </button>
+              <button
+                onClick={() => {
+                  const { kind, messages } = genRun;
+                  setGenRun(null);
+                  void runGen(messages, kind);
+                }}
+                className="rounded-lg bg-stone-900 px-3 py-1.5 text-xs text-white hover:bg-stone-700"
+              >
+                重试生成
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 生成完成：原记忆 vs 新记忆 对比确认 */}
