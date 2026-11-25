@@ -52,13 +52,13 @@ export default function HomeView({ onOpen }: { onOpen: (id: string) => void }) {
         <div className="flex gap-2">
           <button
             onClick={() => setStylesOpen(true)}
-            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm hover:bg-stone-50"
+            className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm hover:bg-stone-50"
           >
             风格库
           </button>
           <button
             onClick={() => setSettingsOpen(true)}
-            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm hover:bg-stone-50"
+            className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm hover:bg-stone-50"
           >
             ⚙ 设置
           </button>
@@ -76,7 +76,7 @@ export default function HomeView({ onOpen }: { onOpen: (id: string) => void }) {
       </div>
 
       {adding && (
-        <div className="mb-6 rounded-xl border border-stone-200 bg-white p-4">
+        <div className="mb-6 rounded-xl border border-stone-200 bg-stone-50 p-4">
           <div className="grid gap-3">
             <input
               className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
@@ -117,7 +117,7 @@ export default function HomeView({ onOpen }: { onOpen: (id: string) => void }) {
           {works.map((w) => (
             <div
               key={w.id}
-              className="group cursor-pointer rounded-xl border border-stone-200 bg-white p-4 transition hover:border-amber-400"
+              className="group cursor-pointer rounded-xl border border-stone-200 bg-stone-50 p-4 transition hover:border-amber-400"
               onClick={() => onOpen(w.id)}
             >
               <div className="flex items-start justify-between">

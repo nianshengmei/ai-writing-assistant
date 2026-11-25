@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 html,
 body {
   height: 100%;
@@ -9,6 +11,69 @@ body {
   background: #fafaf9;
   color: #1c1917;
   font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+
+/* ---------- 暗色主题：重映射 Tailwind v4 调色板 CSS 变量 ----------
+   组件无需逐个加 dark: 类；stone/amber/red/green/purple 的浅色档
+   在 .dark 下翻转为深色档，深色档翻转为浅色档，全应用自动换肤。 */
+.dark body {
+  background: #0c0a09;
+  color: #e7e5e4;
+}
+
+.dark {
+  /* stone：亮↔暗反转 */
+  --color-stone-50: #1c1917;
+  --color-stone-100: #292524;
+  --color-stone-200: #44403c;
+  --color-stone-300: #57534e;
+  --color-stone-400: #a8a29e;
+  --color-stone-500: #d6d3d1;
+  --color-stone-600: #e7e5e4;
+  --color-stone-700: #f5f5f4;
+  --color-stone-800: #fafaf9;
+  /* stone-900 仅用作主按钮/激活标签背景（text-white 搭配），保持深色 */
+  --color-stone-900: #292524;
+
+  /* amber：底色变深、强调文字变亮；amber-600 按钮主色保持 */
+  --color-amber-50: #451a03;
+  --color-amber-100: #78350f;
+  --color-amber-200: #92400e;
+  --color-amber-300: #b45309;
+  --color-amber-700: #fbbf24;
+  --color-amber-800: #fcd34d;
+  --color-amber-900: #fef3c7;
+
+  /* red：错误提示横幅/按钮 */
+  --color-red-50: #450a0a;
+  --color-red-100: #7f1d1d;
+  --color-red-200: #b91c1c;
+  --color-red-300: #dc2626;
+  --color-red-700: #fca5a5;
+  --color-red-800: #fecaca;
+
+  /* green：成功/采纳状态 */
+  --color-green-50: #052e16;
+  --color-green-100: #14532d;
+  --color-green-200: #166534;
+  --color-green-300: #15803d;
+  --color-green-700: #86efac;
+
+  /* purple：AI 生成辅助色 */
+  --color-purple-50: #2e1065;
+  --color-purple-100: #3b0764;
+  --color-purple-200: #6d28d9;
+  --color-purple-300: #7c3aed;
+  --color-purple-700: #c4b5fd;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #44403c;
+}
+
+/* 主按钮 hover（hover:bg-stone-700）在暗色下保持深色，避免闪白 */
+.dark .hover\:bg-stone-700:hover {
+  background-color: #57534e;
 }
 
 ::-webkit-scrollbar {

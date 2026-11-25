@@ -36,7 +36,7 @@ export default function ProjectView({ workId, onBack }: { workId: string; onBack
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex items-center gap-3 border-b border-stone-200 bg-white px-4 py-2.5">
+      <header className="flex items-center gap-3 border-b border-stone-200 bg-stone-50 px-4 py-2.5">
         <button onClick={onBack} className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-xs hover:bg-stone-50">
           ← 目录
         </button>

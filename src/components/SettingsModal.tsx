@@ -5,14 +5,17 @@ import { loadConfig, saveConfig, backend } from "@/lib/library";
 import { isTauri } from "@/lib/env";
 import { PROVIDER_PRESETS, newProvider, presetByKey } from "@/lib/presets";
 import { testConnection, doFetch } from "@/lib/llm";
+import { useTheme } from "next-themes";
+import { getSkin, saveSkin, compressImage } from "@/lib/skin";
 import { version as pkgVersion } from "../../package.json";
-import type { StoredConfig, ProviderConfig } from "@/lib/types";
+import type { StoredConfig, ProviderConfig, SkinConfig } from "@/lib/types";
 
-type Page = "about" | "models" | "data";
+type Page = "about" | "models" | "data" | "appearance";
 
 const MENU: { key: Page; label: string }[] = [
   { key: "about", label: "关于" },
   { key: "models", label: "模型" },
+  { key: "appearance", label: "外观" },
   { key: "data", label: "数据目录" },
 ];
 
@@ -157,7 +160,7 @@ export default function SettingsModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div
-        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white"
+        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-stone-50"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-stone-200 px-5 py-3">
@@ -190,6 +193,7 @@ export default function SettingsModal({
           {/* 右侧内容 */}
           <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {page === "about" && <AboutPage />}
+            {page === "appearance" && <AppearancePage />}
 
             {page === "models" && view === "list" && (
               <ModelsListPage
@@ -334,6 +338,130 @@ function AboutPage() {
               </a>
             </>
           )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AppearancePage() {
+  const { theme, setTheme } = useTheme();
+  const [skin, setSkin] = useState<SkinConfig>({});
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    getSkin().then(setSkin).catch(() => undefined);
+  }, []);
+
+  async function onPickBg(file: File) {
+    if (!/^image\//.test(file.type)) {
+      setMsg({ ok: false, text: "请选择图片文件（jpg/png/webp）" });
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const dataUrl = await compressImage(file);
+      const next = await saveSkin({ background: dataUrl, dim: skin.dim ?? 0.45 });
+      setSkin(next);
+      setMsg({ ok: true, text: "背景已设置（已压缩保存到数据目录，随配置同步）" });
+    } catch (e) {
+      setMsg({ ok: false, text: `设置背景失败：${(e as Error)?.message ?? e}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDim(v: number) {
+    setSkin((s) => ({ ...s, dim: v }));
+    await saveSkin({ dim: v });
+  }
+
+  async function clearBg() {
+    const next = await saveSkin({ background: undefined });
+    setSkin(next);
+    setMsg({ ok: true, text: "已清除背景图" });
+  }
+
+  const THEME_OPTIONS: { key: string; label: string }[] = [
+    { key: "light", label: "亮色" },
+    { key: "dark", label: "暗色" },
+    { key: "system", label: "跟随系统" },
+  ];
+
+  return (
+    <div className="space-y-5 text-sm text-stone-600">
+      <div>
+        <h3 className="mb-2 text-sm font-medium text-stone-800">主题</h3>
+        <div className="flex gap-2">
+          {THEME_OPTIONS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTheme(t.key)}
+              className={`rounded-lg border px-3 py-1.5 text-xs ${
+                (theme ?? "system") === t.key
+                  ? "border-amber-400 bg-amber-50 text-amber-800"
+                  : "border-stone-300 text-stone-600 hover:bg-stone-50"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-xs text-stone-400">暗色主题自动适配全部页面；「跟随系统」随操作系统亮暗切换。</p>
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-sm font-medium text-stone-800">自定义背景图</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="cursor-pointer rounded-lg border border-stone-300 px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50">
+            {busy ? "处理中…" : "🖼 选择图片"}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={busy}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void onPickBg(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {skin.background && (
+            <button onClick={clearBg} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50">
+              清除背景
+            </button>
+          )}
+        </div>
+        <p className="mt-1.5 text-xs text-stone-400">图片会自动压缩到最长边 1920px 并保存在数据目录，背景始终显示在内容之下。</p>
+        {skin.background && (
+          <div className="mt-3 max-w-md">
+            <label className="mb-1 flex items-center justify-between text-xs text-stone-500">
+              背景暗化（降低干扰）
+              <span>{Math.round((skin.dim ?? 0.45) * 100)}%</span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={85}
+              step={5}
+              value={Math.round((skin.dim ?? 0.45) * 100)}
+              onChange={(e) => void onDim(Number(e.target.value) / 100)}
+              className="w-full accent-amber-600"
+            />
+          </div>
+        )}
+      </div>
+
+      {msg && (
+        <p
+          className={`rounded-lg px-3 py-2 text-xs ${
+            msg.ok ? "border border-green-200 bg-green-50 text-green-700" : "border border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          {msg.text}
         </p>
       )}
     </div>

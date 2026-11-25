@@ -36,7 +36,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
   }
 
   const input = "rounded-lg border border-stone-300 px-3 py-2 text-sm";
-  const btn = "rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50";
+  const btn = "rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-xs hover:bg-stone-50";
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-5">
@@ -66,7 +66,7 @@ export default function OutlinePanel({ project, onChanged }: { project: ProjectD
       {entries.length === 0 && <p className="text-sm text-stone-400">还没有章节。先添加章节，再为每章填写细纲（生成正文时的核心依据）。AI 续推细纲请到「AI讨论」页。</p>}
 
       {entries.map((e, i) => (
-        <div key={e.chId} className="mb-3 rounded-xl border border-stone-200 bg-white p-3">
+        <div key={e.chId} className="mb-3 rounded-xl border border-stone-200 bg-stone-50 p-3">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-xs text-stone-400">{e.chId.replace("ch-", "")}</span>
             <input

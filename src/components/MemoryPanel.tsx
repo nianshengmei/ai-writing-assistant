@@ -171,7 +171,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
   }
 
   const input = "rounded-lg border border-stone-300 px-3 py-2 text-sm";
-  const btn = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs hover:bg-stone-50";
+  const btn = "rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-xs hover:bg-stone-50";
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-5">
@@ -197,7 +197,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
             key={t.key}
             onClick={() => setTab(t.key)}
             className={`rounded-lg px-3 py-1.5 text-sm ${
-              tab === t.key ? "bg-stone-900 text-white" : "border border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
+              tab === t.key ? "bg-stone-900 text-white" : "border border-stone-200 bg-stone-50 text-stone-600 hover:bg-stone-50"
             }`}
           >
             {t.label}
@@ -253,7 +253,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
             <ModelPicker providers={charModel.providers} value={charModel.selectedId} onChange={charModel.select} />
           </div>
           {characters.map((c) => (
-            <div key={c.id} className="rounded-xl border border-stone-200 bg-white p-3">
+            <div key={c.id} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
               <div className="mb-2 flex gap-2">
                 <input className={`${input} w-40`} placeholder="姓名" value={c.name} onChange={(e) => setCharacters(characters.map((x) => (x.id === c.id ? { ...x, name: e.target.value } : x)))} />
                 <input className={`${input} flex-1`} placeholder="与主角关系（如：师尊 / 宿敌 / 挚友）" value={c.relation} onChange={(e) => setCharacters(characters.map((x) => (x.id === c.id ? { ...x, relation: e.target.value } : x)))} />
@@ -317,7 +317,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
             <ModelPicker providers={worldModel.providers} value={worldModel.selectedId} onChange={worldModel.select} />
           </div>
           {worldview.map((w) => (
-            <div key={w.id} className="rounded-xl border border-stone-200 bg-white p-3">
+            <div key={w.id} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
               <div className="mb-2 flex gap-2">
                 <select className={`${input} w-28`} value={w.category} onChange={(e) => setWorldview(worldview.map((x) => (x.id === w.id ? { ...x, category: e.target.value } : x)))}>
                   {["地点", "势力", "规则", "物品", "体系", "其他"].map((cat) => (
@@ -404,7 +404,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
             + 添加预设
           </button>
           {presets.map((p) => (
-            <div key={p.id} className="rounded-xl border border-stone-200 bg-white p-3">
+            <div key={p.id} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
               <div className="mb-2 flex gap-2">
                 <input className={`${input} w-56`} placeholder="预设标题" value={p.title} onChange={(e) => setPresets(presets.map((x) => (x.id === p.id ? { ...x, title: e.target.value } : x)))} />
                 <input className={`${input} w-40`} placeholder="预计推进章节（如：第30章前后）" value={p.targetChapter} onChange={(e) => setPresets(presets.map((x) => (x.id === p.id ? { ...x, targetChapter: e.target.value } : x)))} />
@@ -444,7 +444,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
             + 添加伏笔
           </button>
           {foreshadows.map((f) => (
-            <div key={f.id} className="rounded-xl border border-stone-200 bg-white p-3">
+            <div key={f.id} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
               <div className="mb-2 flex gap-2">
                 <input className={`${input} flex-1`} placeholder="伏笔标题" value={f.title} onChange={(e) => setForeshadows(foreshadows.map((x) => (x.id === f.id ? { ...x, title: e.target.value } : x)))} />
                 <input className={`${input} w-32`} placeholder="埋于（章节）" value={f.plantedIn} onChange={(e) => setForeshadows(foreshadows.map((x) => (x.id === f.id ? { ...x, plantedIn: e.target.value } : x)))} />
@@ -490,7 +490,7 @@ export default function MemoryPanel({ project, onChanged }: { project: ProjectDo
             const summary = recap.find((r) => r.chId === ch.chId)?.summary ?? "";
             const discarded = (ch.tags ?? []).includes("tag-discard");
             return (
-              <div key={ch.chId} className="mb-2 rounded-xl border border-stone-200 bg-white p-3">
+              <div key={ch.chId} className="mb-2 rounded-xl border border-stone-200 bg-stone-50 p-3">
                 <div className="mb-2 flex items-center gap-2">
                   <span className="text-xs text-stone-400">{ch.chId.replace("ch-", "")}</span>
                   <span className="text-sm font-medium">{ch.title}</span>

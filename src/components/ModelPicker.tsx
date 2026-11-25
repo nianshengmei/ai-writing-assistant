@@ -32,7 +32,7 @@ export default function ModelPicker({
       title="本功能使用的模型（各功能独立记忆）"
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className={`rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-xs text-stone-700 ${className}`}
+      className={`rounded-lg border border-stone-300 bg-stone-50 px-2 py-1.5 text-xs text-stone-700 ${className}`}
     >
       {providers.map((p) => (
         <option key={p.id} value={p.id}>

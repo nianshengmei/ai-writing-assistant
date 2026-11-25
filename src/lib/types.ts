@@ -10,9 +10,18 @@ export interface ProviderConfig {
   kind?: "openai" | "claude";
 }
 
+export interface SkinConfig {
+  /** 自定义背景图（data URL，上传时 canvas 压缩至最长边 1920px） */
+  background?: string;
+  /** 背景暗化程度 0~0.85，防止背景图干扰文字 */
+  dim?: number;
+}
+
 export interface StoredConfig {
   providers: ProviderConfig[];
   activeId: string;
+  /** 外观：背景图与暗化程度（主题由 next-themes 存 localStorage） */
+  skin?: SkinConfig;
 }
 
 export interface StyleProfile {

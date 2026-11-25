@@ -297,7 +297,7 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 顶部工具栏 */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-stone-200 bg-white px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-stone-200 bg-stone-50 px-4 py-2">
         <span className="text-xs text-stone-400">讨论使用：</span>
         <ModelPicker providers={dm.providers} value={dm.selectedId} onChange={dm.select} disabled={streaming || generating} />
         <span className="mx-2 h-4 w-px bg-stone-200" />
@@ -404,7 +404,7 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
       </div>
 
       {/* 输入区 */}
-      <div className="border-t border-stone-200 bg-white p-3">
+      <div className="border-t border-stone-200 bg-stone-50 p-3">
         <div className="flex items-end gap-2">
           <textarea
             className="min-h-16 flex-1 resize-none rounded-xl border border-stone-300 px-3 py-2 text-sm"
@@ -421,7 +421,7 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
           {streaming ? (
             <button
               onClick={() => abortRef.current?.abort()}
-              className="rounded-xl border border-red-300 bg-white px-4 py-2 text-sm text-red-600"
+              className="rounded-xl border border-red-300 bg-stone-50 px-4 py-2 text-sm text-red-600"
             >
               停止
             </button>

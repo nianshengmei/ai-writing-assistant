@@ -424,16 +424,16 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
     if (t.id === "tag-discard") {
       return active
         ? "border-red-400 bg-red-50 text-red-700"
-        : "border-red-200 bg-white text-red-400 hover:border-red-300";
+        : "border-red-200 bg-stone-50 text-red-400 hover:border-red-300";
     }
     if (t.id === "tag-main") {
       return active
         ? "border-green-500 bg-green-50 text-green-700"
-        : "border-stone-300 bg-white text-stone-500 hover:border-green-300";
+        : "border-stone-300 bg-stone-50 text-stone-500 hover:border-green-300";
     }
     return active
       ? "border-purple-500 bg-purple-50 text-purple-700"
-      : "border-stone-300 bg-white text-stone-500 hover:border-purple-300";
+      : "border-stone-300 bg-stone-50 text-stone-500 hover:border-purple-300";
   }
 
   async function toggleChapterTag(tagId: string) {
@@ -585,7 +585,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
         <button
           onClick={createChapterAtEnd}
           disabled={streaming}
-          className="mb-2 w-full rounded-lg border border-dashed border-stone-300 px-2 py-1.5 text-xs text-stone-500 hover:border-stone-400 hover:bg-white disabled:opacity-40"
+          className="mb-2 w-full rounded-lg border border-dashed border-stone-300 px-2 py-1.5 text-xs text-stone-500 hover:border-stone-400 hover:bg-stone-50 disabled:opacity-40"
         >
           ＋ 新章节
         </button>
@@ -674,7 +674,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               </button>
               <span className="ml-2 text-stone-500">承接：</span>
               <select
-                className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs"
+                className="rounded-lg border border-stone-300 bg-stone-50 px-2 py-1 text-xs"
                 value={entry.prevChId ?? ""}
                 onChange={(e) => void setPrevChapter(e.target.value)}
                 title="生成本章时承接哪一章；默认为紧邻上一章"
@@ -739,7 +739,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                     className={`rounded-full border px-2.5 py-1 ${
                       active
                         ? "border-purple-500 bg-purple-50 text-purple-700"
-                        : "border-stone-300 bg-white text-stone-500 hover:border-stone-400"
+                        : "border-stone-300 bg-stone-50 text-stone-500 hover:border-stone-400"
                     }`}
                   >
                     {active && i === 0 ? "★ " : ""}
@@ -755,7 +755,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               {streaming ? (
                 <button
                   onClick={() => abortRef.current?.abort()}
-                  className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs text-red-600"
+                  className="rounded-lg border border-red-300 bg-stone-50 px-3 py-1.5 text-xs text-red-600"
                 >
                   停止
                 </button>
@@ -769,13 +769,13 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                   </button>
                   <button
                     onClick={() => setShowFeedback((v) => !v)}
-                    className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50"
+                    className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-xs hover:bg-stone-50"
                   >
                     提意见重新生成
                   </button>
                   <button
                     onClick={runPreview}
-                    className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50"
+                    className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-xs hover:bg-stone-50"
                   >
                     预览提示词
                   </button>
@@ -792,7 +792,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
                   key={k}
                   disabled={streaming}
                   onClick={() => runSelectionOp(k)}
-                  className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50 disabled:opacity-40"
+                  className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-xs hover:bg-stone-50 disabled:opacity-40"
                 >
                   {label}
                 </button>
@@ -817,7 +817,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               <button
                 disabled={streaming}
                 onClick={saveDraftNow}
-                className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-40"
+                className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-40"
                 title="立即保存当前内容为草稿（平时每 0.8 秒也会自动保存）"
               >
                 保存草稿
@@ -825,7 +825,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               {hasDraft && !entry.approved && (
                 <button
                   onClick={discard}
-                  className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs text-stone-500 hover:bg-stone-50"
+                  className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-xs text-stone-500 hover:bg-stone-50"
                 >
                   放弃草稿
                 </button>
@@ -833,13 +833,13 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
               <button
                 disabled={streaming}
                 onClick={deleteChapter}
-                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 disabled:opacity-40"
+                className="rounded-lg border border-red-200 bg-stone-50 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 disabled:opacity-40"
               >
                 删除本章
               </button>
               <button
                 onClick={handleExport}
-                className="rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs hover:bg-stone-50"
+                className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-xs hover:bg-stone-50"
               >
                 导出全书
               </button>
@@ -876,7 +876,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
 
             <textarea
               ref={textareaRef}
-              className="min-h-0 flex-1 resize-none rounded-xl border border-stone-200 bg-white p-4 text-sm leading-relaxed"
+              className="min-h-0 flex-1 resize-none rounded-xl border border-stone-200 bg-stone-50 p-4 text-sm leading-relaxed"
               placeholder="点「生成本章」让 AI 按记忆库与风格写作；或直接在此输入。草稿会自动保存。"
               value={draftText}
               onChange={(e) => onDraftChange(e.target.value)}
@@ -900,7 +900,7 @@ export default function WritingDesk({ project, onChanged }: { project: ProjectDo
       {showPreviewModal && preview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowPreviewModal(false)}>
           <div
-            className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white"
+            className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-stone-50"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-stone-200 px-5 py-3">

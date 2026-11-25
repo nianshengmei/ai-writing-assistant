@@ -55,7 +55,7 @@ export default function HistoryPanel({ project, onChanged }: { project: ProjectD
               key={r.id}
               onClick={() => setSelected(r)}
               className={`mb-2 block w-full rounded-xl border p-3 text-left ${
-                selected?.id === r.id ? "border-amber-400 bg-amber-50" : "border-stone-200 bg-white hover:border-stone-400"
+                selected?.id === r.id ? "border-amber-400 bg-amber-50" : "border-stone-200 bg-stone-50 hover:border-stone-400"
               }`}
             >
               <div className="flex items-center justify-between text-xs text-stone-400">
