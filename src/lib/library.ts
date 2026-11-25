@@ -16,6 +16,7 @@ import type {
   FuturePreset,
   RecapEntry,
   ForeshadowEntry,
+  DiscussionsFile,
   StyleDoc,
   StoredConfig,
   GenerationRecord,
@@ -48,6 +49,7 @@ const P = {
   presets: (w: string) => `${w}/memory/future-presets.json`,
   recap: (w: string) => `${w}/memory/recap.json`,
   foreshadows: (w: string) => `${w}/foreshadows.json`,
+  discussions: (w: string) => `${w}/discussions.json`,
   draft: (w: string, c: string) => `${w}/drafts/${c}.json`,
   chapter: (w: string, c: string) => `${w}/chapters/${c}.json`,
   generation: (w: string, g: string) => `${w}/generations/${g}.json`,
@@ -296,6 +298,18 @@ export async function listForeshadows(workId: string): Promise<ForeshadowEntry[]
 export async function saveForeshadows(workId: string, entries: ForeshadowEntry[]): Promise<void> {
   await fs.writeJson(P.foreshadows(workId), { entries });
 }
+
+// ---------- AI 讨论会话（切 tab / 重启均持久化） ----------
+export async function getDiscussions(workId: string): Promise<DiscussionsFile> {
+  return (
+    (await fs.readJson<DiscussionsFile>(P.discussions(workId))) ?? { activeId: "", sessions: [] }
+  );
+}
+
+export async function saveDiscussions(workId: string, file: DiscussionsFile): Promise<void> {
+  await fs.writeJson(P.discussions(workId), file);
+}
+
 
 // ---------- 全局风格库 ----------
 export async function listStyles(): Promise<StyleDoc[]> {

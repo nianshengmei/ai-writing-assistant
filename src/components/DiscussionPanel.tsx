@@ -11,6 +11,9 @@ import {
   saveWorldview,
   addChapterEntry,
   updateOutlineEntry,
+  getDiscussions,
+  saveDiscussions,
+  uid,
 } from "@/lib/library";
 import { streamChat, chatOnce } from "@/lib/llm";
 import { useFeatureModel } from "@/lib/useProviderSelection";
@@ -26,7 +29,16 @@ import {
 import ModelPicker from "./ModelPicker";
 import PromptEditModal from "./PromptEditModal";
 import MemoryCompareModal from "./MemoryCompareModal";
-import type { ProjectDoc, ProtagonistDoc, CharacterEntry, WorldviewEntry, OutlineEntry, ChatMessage } from "@/lib/types";
+import type {
+  ProjectDoc,
+  ProtagonistDoc,
+  CharacterEntry,
+  WorldviewEntry,
+  OutlineEntry,
+  ChatMessage,
+  DiscussionSession,
+  DiscussionsFile,
+} from "@/lib/types";
 
 const MAX_ROUNDS = 20;
 
@@ -43,19 +55,77 @@ interface CompareState {
 export default function DiscussionPanel({ project, onChanged }: { project: ProjectDoc; onChanged: () => void }) {
   const workId = project.id;
   const dm = useFeatureModel("discuss");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  /** 用户多选的对话消息（索引），生成记忆/大纲时只基于勾选内容 */
-  const [selected, setSelected] = useState<number[]>([]);
+  /** 讨论会话集合（持久化到 works/<id>/discussions.json），null = 加载中 */
+  const [disc, setDisc] = useState<DiscussionsFile | null>(null);
+  const discRef = useRef<DiscussionsFile | null>(null);
+  /** 用户手动展开/折叠的思考块（消息下标 → 是否展开），优先于自动行为 */
+  const [manualFold, setManualFold] = useState<Record<number, boolean>>({});
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [genCtx, setGenCtx] = useState<{ kind: GenKind; messages: ChatMessage[] } | null>(null);
   const [compare, setCompare] = useState<CompareState | null>(null);
-  /** 用户手动展开/折叠的思考块（下标 → 是否展开），优先于自动行为 */
-  const [manualFold, setManualFold] = useState<Record<number, boolean>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // 当前会话派生值
+  const cur = disc?.sessions.find((s) => s.id === disc.activeId) ?? null;
+  const messages = cur?.messages ?? [];
+  const selected = cur?.selected ?? [];
+
+  // ---------- 持久化 ----------
+  function apply(next: DiscussionsFile, save = true) {
+    discRef.current = next;
+    setDisc(next);
+    if (save) void saveDiscussions(workId, next);
+  }
+
+  /** 按会话 id 更新某个会话（流式回复可能落在非当前会话，避免串话） */
+  function patchSession(sid: string, patch: (s: DiscussionSession) => DiscussionSession, save = true) {
+    const d = discRef.current;
+    if (!d) return;
+    apply(
+      { ...d, sessions: d.sessions.map((s) => (s.id === sid ? { ...patch(s), updatedAt: Date.now() } : s)) },
+      save,
+    );
+  }
+
+  /** 更新当前激活会话 */
+  function patchCur(patch: (s: DiscussionSession) => DiscussionSession, save = true) {
+    const d = discRef.current;
+    if (!d) return;
+    patchSession(d.activeId, patch, save);
+  }
+
+  function newSessionObj(): DiscussionSession {
+    const now = Date.now();
+    return { id: uid(), title: "新讨论", createdAt: now, updatedAt: now, messages: [], selected: [] };
+  }
+
+  // 进入页面时加载会话；首次使用自动建一个空会话
+  useEffect(() => {
+    let alive = true;
+    getDiscussions(workId).then((d) => {
+      if (!alive) return;
+      if (!d.sessions.length) {
+        const s = newSessionObj();
+        d = { activeId: s.id, sessions: [s] };
+      }
+      if (!d.sessions.some((s) => s.id === d.activeId)) {
+        d = { ...d, activeId: d.sessions[d.sessions.length - 1].id };
+      }
+      discRef.current = d;
+      setDisc(d);
+      void saveDiscussions(workId, d); // 兜底落盘（首次补建默认会话）
+    });
+    return () => {
+      alive = false;
+      // 卸载时强制落盘一次，保证切换 tab 不丢数据
+      if (discRef.current) void saveDiscussions(workId, discRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -74,11 +144,18 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
   async function send() {
     const text = input.trim();
     if (!text || streaming) return;
+    const d0 = discRef.current;
+    if (!d0) return;
+    const sid = d0.activeId;
+    const s0 = d0.sessions.find((s) => s.id === sid);
+    if (!s0) return;
     const provider = ensureProvider();
     if (!provider) return;
-    const history = lastRounds(messages, MAX_ROUNDS);
-    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
-    setMessages([...next, { role: "assistant", content: "" }]);
+    const history = lastRounds(s0.messages, MAX_ROUNDS);
+    const next: ChatMessage[] = [...s0.messages, { role: "user", content: text }];
+    // 首条用户消息自动作为会话标题
+    const title = s0.messages.length === 0 ? (text.length > 15 ? `${text.slice(0, 15)}…` : text) : s0.title;
+    patchSession(sid, (s) => ({ ...s, title, messages: [...next, { role: "assistant", content: "" }] }), false);
     setInput("");
     setStreaming(true);
     setStatus(null);
@@ -94,18 +171,18 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
         signal: ctrl.signal,
         onDelta: (d) => {
           acc += d;
-          setMessages([...next, { role: "assistant", content: acc, reasoning }]);
+          patchSession(sid, (s) => ({ ...s, messages: [...next, { role: "assistant", content: acc, reasoning }] }), false);
         },
         onReasoning: (d) => {
           reasoning += d;
-          setMessages([...next, { role: "assistant", content: acc, reasoning }]);
+          patchSession(sid, (s) => ({ ...s, messages: [...next, { role: "assistant", content: acc, reasoning }] }), false);
         },
       });
-      setMessages([...next, { role: "assistant", content: acc, reasoning }]);
+      patchSession(sid, (s) => ({ ...s, messages: [...next, { role: "assistant", content: acc, reasoning }] }));
     } catch (e) {
       const aborted = (e as Error)?.name === "AbortError";
       setStatus({ text: aborted ? "已停止" : `发送失败：${(e as Error)?.message ?? e}`, ok: aborted });
-      setMessages(next); // 移除空回复
+      patchSession(sid, (s) => ({ ...s, messages: next })); // 移除空回复，但保留用户消息并落盘
     } finally {
       setStreaming(false);
       abortRef.current = null;
@@ -287,6 +364,47 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
     return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  // ---------- 会话管理 ----------
+  function switchSession(id: string) {
+    const d = discRef.current;
+    if (!d || id === d.activeId) return;
+    apply({ ...d, activeId: id });
+    setManualFold({});
+    setStatus(null);
+  }
+
+  function newSession() {
+    const d = discRef.current;
+    if (!d) return;
+    const s = newSessionObj();
+    apply({ activeId: s.id, sessions: [...d.sessions, s] });
+    setManualFold({});
+    setStatus(null);
+  }
+
+  function deleteSession() {
+    const d = discRef.current;
+    if (!d) return;
+    const s = d.sessions.find((x) => x.id === d.activeId);
+    if (!s) return;
+    if (!confirm(`删除对话「${s.title}」？共 ${s.messages.length} 条消息，删除后无法恢复。`)) return;
+    const sessions = d.sessions.filter((x) => x.id !== d.activeId);
+    if (!sessions.length) {
+      const fresh = newSessionObj();
+      apply({ activeId: fresh.id, sessions: [fresh] });
+    } else {
+      apply({ activeId: sessions[sessions.length - 1].id, sessions });
+    }
+    setManualFold({});
+    setStatus(null);
+  }
+
+  function clearSession() {
+    if (messages.length && !confirm("清空当前对话的全部消息？（不影响已保存的记忆）")) return;
+    patchCur((s) => ({ ...s, messages: [], selected: [] }));
+    setManualFold({});
+  }
+
   const GEN_BUTTONS: { kind: GenKind; label: string }[] = [
     { kind: "outline", label: "生成大纲" },
     { kind: "worldview", label: "生成世界观" },
@@ -298,13 +416,44 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 顶部工具栏 */}
       <div className="flex flex-wrap items-center gap-2 border-b border-stone-200 bg-stone-50 px-4 py-2">
+        <span className="text-xs text-stone-400">对话：</span>
+        <select
+          value={disc?.activeId ?? ""}
+          onChange={(e) => switchSession(e.target.value)}
+          disabled={disc === null}
+          className="max-w-52 rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
+          title="切换到历史对话"
+        >
+          {(disc?.sessions ?? []).map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.title || "新讨论"}（{s.messages.length}条）
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={newSession}
+          disabled={disc === null}
+          className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-xs text-stone-600 hover:bg-stone-100 disabled:opacity-40"
+          title="开启一个新的对话，旧对话保留可随时切回"
+        >
+          ＋ 新对话
+        </button>
+        <button
+          onClick={deleteSession}
+          disabled={disc === null}
+          className="rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40"
+          title="删除当前对话"
+        >
+          删除
+        </button>
+        <span className="mx-1 h-4 w-px bg-stone-200" />
         <span className="text-xs text-stone-400">讨论使用：</span>
         <ModelPicker providers={dm.providers} value={dm.selectedId} onChange={dm.select} disabled={streaming || generating} />
         <span className="mx-2 h-4 w-px bg-stone-200" />
         <span className="text-xs text-stone-400">已勾选 {selected.length} 条</span>
         {selected.length > 0 && (
           <button
-            onClick={() => setSelected([])}
+            onClick={() => patchCur((s) => ({ ...s, selected: [] }))}
             className="rounded-lg border border-stone-200 px-2 py-1 text-xs text-stone-400 hover:bg-stone-50"
           >
             取消勾选
@@ -322,11 +471,7 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
           </button>
         ))}
         <button
-          onClick={() => {
-            if (messages.length && !confirm("清空当前讨论记录？（不影响已保存的记忆）")) return;
-            setMessages([]);
-            setSelected([]);
-          }}
+          onClick={clearSession}
           className="ml-auto rounded-lg border border-stone-300 px-3 py-1.5 text-xs text-stone-500 hover:bg-stone-50"
         >
           清空讨论
@@ -345,14 +490,19 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
 
       {/* 对话区 */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {messages.length === 0 && (
-          <div className="mt-8 text-center text-sm text-stone-400">
-            <p>在这里和 AI 讨论剧情、大纲、世界观与人物设定（对话携带最近 {MAX_ROUNDS} 轮历史）。</p>
-            <p className="mt-2 text-xs">
-              讨论出结论后，勾选对话中相关的消息（可多选），再点上方「生成大纲 / 世界观 / 配角记忆 / 主角记忆」，
-              AI 会基于勾选内容 + 原记忆整合，弹窗对比确认后才写入。
-            </p>
-          </div>
+        {disc === null ? (
+          <div className="mt-8 text-center text-sm text-stone-400">加载对话记录…</div>
+        ) : (
+          messages.length === 0 && (
+            <div className="mt-8 text-center text-sm text-stone-400">
+              <p>在这里和 AI 讨论剧情、大纲、世界观与人物设定（对话携带最近 {MAX_ROUNDS} 轮历史）。</p>
+              <p className="mt-2 text-xs">
+                对话会自动保存，切换标签页或重启应用都不丢失；点「＋ 新对话」可另开话题，旧对话随时切回。
+                讨论出结论后，勾选对话中相关的消息（可多选），再点上方「生成大纲 / 世界观 / 配角记忆 / 主角记忆」，
+                AI 会基于勾选内容 + 原记忆整合，弹窗对比确认后才写入。
+              </p>
+            </div>
+          )
         )}
         {messages.map((m, i) => (
           <div key={i} className={`mb-3 flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -364,9 +514,10 @@ export default function DiscussionPanel({ project, onChanged }: { project: Proje
                 type="checkbox"
                 className="h-4 w-4 accent-amber-600"
                 checked={selected.includes(i)}
-                onChange={(e) =>
-                  setSelected((prev) => (e.target.checked ? [...prev, i] : prev.filter((x) => x !== i)))
-                }
+                onChange={(e) => {
+                  const next = e.target.checked ? [...selected, i] : selected.filter((x) => x !== i);
+                  patchCur((s) => ({ ...s, selected: next }));
+                }}
               />
             </label>
             <div

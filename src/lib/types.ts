@@ -161,3 +161,21 @@ export interface ChatMessage {
   /** 推理模型的思考过程（reasoning_content），仅 UI 展示用，不参与后续请求 */
   reasoning?: string;
 }
+
+/** AI 讨论的单个会话（持久化，切 tab / 重启应用均可恢复） */
+export interface DiscussionSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
+  /** 用户勾选的消息下标（作为生成记忆/大纲的依据） */
+  selected: number[];
+}
+
+/** 作品的讨论会话集合，存于 works/<id>/discussions.json */
+export interface DiscussionsFile {
+  activeId: string;
+  sessions: DiscussionSession[];
+}
+
