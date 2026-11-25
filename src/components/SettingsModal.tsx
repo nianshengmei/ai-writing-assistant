@@ -13,16 +13,16 @@ import type { StoredConfig, ProviderConfig, SkinConfig } from "@/lib/types";
 type Page = "about" | "models" | "data" | "appearance";
 
 const MENU: { key: Page; label: string }[] = [
-  { key: "about", label: "关于" },
   { key: "models", label: "模型" },
   { key: "appearance", label: "外观" },
   { key: "data", label: "数据目录" },
+  { key: "about", label: "关于" },
 ];
 
 export default function SettingsModal({
   onClose,
   onChanged,
-  initialPage = "about",
+  initialPage = "models",
 }: {
   onClose: () => void;
   onChanged?: () => void;
@@ -306,6 +306,7 @@ function AboutPage() {
         <li><b>大纲</b>：章节树 + 标签体系 + 每章细纲，章节可关联前一章。</li>
         <li><b>写作台</b>：按章生成草稿（生成 → 编辑 → 提意见重生成 → 采纳为正式章节），生成前可预览并直接修改完整提示词。</li>
         <li><b>风格库</b>：全局风格独立于作品，支持丢入小说原文让 AI 沉淀风格画像与语言/动作/场面示例（大素材可前/后截断、断点续跑）。</li>
+        <li><b>外观</b>：黑色/白色主题（可跟随系统）、自定义图片背景与暗化调节，支持应用内检查更新。</li>
         <li><b>生成历史</b>：每次模型调用完整落盘，可追溯、可恢复为草稿。</li>
       </ul>
 

@@ -1,6 +1,6 @@
 [package]
 name = "ai-writing-assistant"
-version = "0.1.5"
+version = "0.1.6"
 description = "AI 小说写作神器"
 edition = "2021"
 
